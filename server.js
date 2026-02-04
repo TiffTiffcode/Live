@@ -89,7 +89,6 @@ if (!recordsCtrl || typeof recordsCtrl.createRecord !== 'function') {
 app.set('trust proxy', 1);
 
 //////////////// Stripe
-
 const Stripe = require("stripe");
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -98,15 +97,6 @@ const isProd = process.env.NODE_ENV === "production";
 const webhookSecret = isProd
   ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
   : process.env.STRIPE_WEBHOOK_SECRET_TEST;
-
-event = stripe.webhooks.constructEvent(
-  req.body,
-  req.headers["stripe-signature"],
-  webhookSecret
-);
-// (If you only want ONE env var for now, you can instead do:
-// const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-// )
 
 // ✅ Stripe webhook MUST use raw body
 app.post(
@@ -134,14 +124,7 @@ app.post(
         if (pi?.metadata?.kind === "suite_rent") {
           const rentId = pi.metadata.rentId;
           console.log("✅ Rent paid:", { rentId, pi: pi.id });
-
-          // TODO: mark Rent record as paid in Mongo
-          // await Record.findByIdAndUpdate(rentId, {
-          //   $set: {
-          //     "values.Status": "Paid",
-          //     "values.stripePaymentIntentId": pi.id,
-          //   },
-          // });
+          // TODO: update Mongo record...
         }
       }
 
@@ -164,6 +147,7 @@ app.post(
     }
   }
 );
+
 
 
 
