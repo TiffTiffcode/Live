@@ -1,10 +1,9 @@
 //C:\Users\tiffa\OneDrive\Desktop\Live\server.js
-require("dotenv").config();
-const path = require("path");
-
+require('dotenv').config();
 const express = require('express');
 const app = express();  
 const cors = require('cors');
+const isProd = process.env.NODE_ENV === 'production';
 
 const allowedOrigins = [
   'http://localhost:3000',
@@ -53,6 +52,7 @@ const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage() });
 
 
+const path = require('path');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const MongoStore = require('connect-mongo');
@@ -88,90 +88,10 @@ if (!recordsCtrl || typeof recordsCtrl.createRecord !== 'function') {
 
 app.set('trust proxy', 1);
 
-//////////////// Stripe
-
-const Stripe = require("stripe");
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
-// decide which webhook secret to use
-const isProd = process.env.NODE_ENV === "production";
-const webhookSecret = isProd
-  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
-  : process.env.STRIPE_WEBHOOK_SECRET_TEST;
-
-event = stripe.webhooks.constructEvent(
-  req.body,
-  req.headers["stripe-signature"],
-  webhookSecret
-);
-// (If you only want ONE env var for now, you can instead do:
-// const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-// )
-
-// ✅ Stripe webhook MUST use raw body
-app.post(
-  "/api/stripe/webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    let event;
-
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        req.headers["stripe-signature"],
-        webhookSecret
-      );
-    } catch (err) {
-      console.error("Webhook signature failed:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    try {
-      // ✅ handle events here
-      if (event.type === "payment_intent.succeeded") {
-        const pi = event.data.object;
-
-        if (pi?.metadata?.kind === "suite_rent") {
-          const rentId = pi.metadata.rentId;
-          console.log("✅ Rent paid:", { rentId, pi: pi.id });
-
-          // TODO: mark Rent record as paid in Mongo
-          // await Record.findByIdAndUpdate(rentId, {
-          //   $set: {
-          //     "values.Status": "Paid",
-          //     "values.stripePaymentIntentId": pi.id,
-          //   },
-          // });
-        }
-      }
-
-      if (event.type === "payment_intent.payment_failed") {
-        const pi = event.data.object;
-
-        if (pi?.metadata?.kind === "suite_rent") {
-          console.log("❌ Rent payment failed:", {
-            rentId: pi.metadata.rentId,
-            pi: pi.id,
-          });
-        }
-      }
-
-      console.log("✅ Stripe event:", event.type);
-      return res.json({ received: true });
-    } catch (e) {
-      console.error("❌ Webhook handler error:", e);
-      return res.status(500).json({ received: false });
-    }
-  }
-);
-
-
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-app.get("/api/stripe/ping", (_req, res) => res.json({ ok: true, t: Date.now() }));
 
 
 // S3 client (only constructed if you have creds)
@@ -218,24 +138,26 @@ const mongoSessionUrl =
 
 app.use(
   session({
-    secret: process.env.SESSION_SECRET,
+    secret: process.env.SESSION_SECRET || 'devsecret',
     resave: false,
     saveUninitialized: false,
-
-    store: MongoStore.create({ mongoUrl: mongoSessionUrl }),
-
+    store: MongoStore.create({
+      mongoUrl: mongoSessionUrl,
+      ttl: 14 * 24 * 60 * 60,
+    }),
     cookie: {
       httpOnly: true,
-      secure: isProd,                 // true on https
-      sameSite: isProd ? "none" : "lax",
-      domain: isProd ? ".suiteseat.io" : undefined, // ✅ important for app.suiteseat.io + suiteseat.io
-      maxAge: 1000 * 60 * 60 * 24 * 7,
+      sameSite: isProd ? 'none' : 'lax',
+      secure: isProd,
+      path: '/',
+      maxAge: 1000 * 60 * 60 * 24,
     },
   })
 );
+
+
 // after body parsers & session middleware:
 app.use(require('./routes/auth'));
-app.use("/api/holds", holdsRouter);
 
 // ----------hold helper ----------
 
@@ -329,6 +251,8 @@ function requireLogin(req, res, next) {
   next();
 }
 
+// helper you already asked about:
+function escapeRegex(s = '') { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 
 
@@ -655,12 +579,12 @@ module.exports = { enforcedWhereForUser };
 // ------------------------------------------------------------
 // RECORDS: CREATE / UPDATE / DELETE (aligned with visibility)
 // ------------------------------------------------------------
+
 app.post("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
   try {
-    const sid = String(req.session?.userId || "");
-    if (!sid) return res.status(401).json({ items: [] });
-
+    const me = String(req.session.userId || "");
     const typeName = decodeURIComponent(req.params.typeName || "").trim();
+    if (!me) return res.status(401).json({ items: [] });
 
     const dt = await getDataTypeByNameLoose(typeName);
     if (!dt?._id) return res.status(404).json({ items: [] });
@@ -668,14 +592,11 @@ app.post("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
     const rawValues = (req.body && req.body.values) || {};
     const values = await normalizeValuesForType(dt._id, rawValues);
 
-    // ✅ universal ownership stamp (ALL types)
-    values.ownerUserId = sid;
-
     const doc = await Record.create({
       dataTypeId: dt._id,
       values,
-      createdBy: sid,
-      updatedBy: sid,
+      createdBy: me,
+      updatedBy: me,
       deletedAt: null,
     });
 
@@ -767,26 +688,6 @@ app.delete("/api/records/:typeName/:id", ensureAuthenticated, async (req, res) =
       q = { ...baseQ, createdBy: me };
     }
 
-    console.log("[DELETE] typeName:", typeName);
-console.log("[DELETE] recordId:", recordId);
-console.log("[DELETE] me:", me);
-console.log("[DELETE] roles:", roles);
-
-console.log("[DELETE] dt._id:", String(dt._id));
-
-// show the final query we use
-console.log("[DELETE] final q:", JSON.stringify(q, null, 2));
-
-// 🔍 IMPORTANT: read the record ignoring permissions to compare
-const raw = await Record.findById(recordId).lean();
-console.log("[DELETE] raw record (by id):", raw && {
-  _id: String(raw._id),
-  dataTypeId: String(raw.dataTypeId),
-  deletedAt: raw.deletedAt,
-  createdBy: raw.createdBy,
-  updatedBy: raw.updatedBy,
-});
-
     const updated = await Record.findOneAndUpdate(
       q,
       { $set: { deletedAt: new Date(), updatedBy: me }, $currentDate: { updatedAt: true } },
@@ -860,8 +761,7 @@ app.get("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
           { [`values.${key}`]: eqOrIn },
           { [`values.${key}._id`]: eqOrIn },
           { [`values.${key}Id`]: eqOrIn },
-          { [`values.${key} Id`]: eqOrIn },
-
+          { [`values['${key} Id']`]: eqOrIn },
         ],
       });
     }
@@ -881,11 +781,7 @@ app.get("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
 const nameCanon = String(dt.nameCanonical || "").toLowerCase();
 
 // “top-level” types should act like: creator owns it
-const TOP_LEVEL = new Set([
-  "business", "calendar", "category", "service",
-  "course", "coursesection", "courselesson", "coursechapter"
-]);
-
+const TOP_LEVEL = new Set(["business", "calendar", "category", "service"]);
 
 // If top-level: allow createdBy OR legacy missing createdBy
 const enforcedWhere = TOP_LEVEL.has(nameCanon)
@@ -893,11 +789,11 @@ const enforcedWhere = TOP_LEVEL.has(nameCanon)
       $or: [
         { createdBy: me },
 
-        // ✅ also allow your newer universal stamp
-        { "values.ownerUserId": me },
-        { "values.ownerUserId._id": me },
+        // ✅ legacy records created before you started setting createdBy
+        { createdBy: null },
+        { createdBy: { $exists: false } },
 
-        // (optional future)
+        // (future) if you ever add these on Record
         { owners: me },
         { members: me },
       ],
@@ -964,170 +860,6 @@ app.get("/api/records/:typeName/:id", ensureAuthenticated, async (req, res) => {
 });
 
 
-// PUBLIC READ: /public/records?dataType=Upcoming%20Hours&where=...
-// - No auth required (public pages can use it)
-// - Supports ?where JSON and simple query params
-// - Maps filters to values.<Field> because Record stores fields in values
-app.get("/public/records", async (req, res) => {
-  try {
-    const dataTypeName = String(req.query.dataType || "").trim();
-    if (!dataTypeName) return res.json({ items: [] });
-
-    // 1) parse ?where={}
-    let whereObj = {};
-    if (req.query.where) {
-      try {
-        whereObj = JSON.parse(String(req.query.where));
-      } catch {
-        whereObj = {};
-      }
-    }
-
-    // 2) also support simple params:
-    // /public/records?dataType=Service&Business=...&Calendar=...
-    const RESERVED = new Set(["dataType", "where", "limit", "ts", "cache", "_", "page"]);
-    const simple = {};
-    for (const [k, v] of Object.entries(req.query || {})) {
-      const key = String(k || "").trim();
-      if (!key || RESERVED.has(key)) continue;
-
-      const vals = Array.isArray(v) ? v : [v];
-      const clean = vals.map((x) => String(x ?? "").trim()).filter(Boolean);
-      if (!clean.length) continue;
-
-      simple[key] = clean.length === 1 ? clean[0] : { $in: clean };
-    }
-
-    // merge where + simple (AND)
-    const merged = (() => {
-      const parts = [];
-      if (whereObj && Object.keys(whereObj).length) parts.push(whereObj);
-      if (simple && Object.keys(simple).length) parts.push(simple);
-      if (!parts.length) return {};
-      return parts.length === 1 ? parts[0] : { $and: parts };
-    })();
-
-    // ---- LOGS ----
-    console.log("[public/records] dataType:", dataTypeName);
-    console.log("[public/records] where raw:", req.query.where || null);
-    console.log("[public/records] merged where:", merged);
-    console.log("[public/records] ownerUserId query:", req.query.ownerUserId || null);
-
-    // find the datatype
-    const dt = await DataType.findOne({
-      $or: [{ name: dataTypeName }, { nameCanonical: dataTypeName.toLowerCase() }],
-      deletedAt: null,
-    }).lean();
-
-    if (!dt?._id) {
-      console.log("[public/records] datatype not found");
-      return res.json({ items: [] });
-    }
-
-    // -----------------------------
-    // Convert merged filters into Mongo filters
-    // - Scalars go to values.<field>
-    // - Other fields get "ref-or-scalar" matching via buildRefOrScalarMatch()
-    // -----------------------------
-    // ✅ Fields that are ALWAYS plain scalar matches in values (not reference-matching)
-    const ALWAYS_SCALAR = new Set([
-      "ownerUserId",
-      "Created By",
-      "createdBy",
-      "submittedByUserId",
-      "suiteOwnerId",
-      "locationOwnerId",
-    ]);
-
-    function rewriteNode(node) {
-      if (!node || typeof node !== "object") return node;
-      if (Array.isArray(node)) return node.map(rewriteNode);
-
-      const out = {};
-      for (const [k, v] of Object.entries(node)) {
-        if (k === "$and" || k === "$or") {
-          out[k] = rewriteNode(v);
-          continue;
-        }
-
-        if (k === "_id" || k === "id" || k === "recordId") {
-          out["_id"] = v;
-          continue;
-        }
-
-        const isOperatorObject =
-          v &&
-          typeof v === "object" &&
-          !Array.isArray(v) &&
-          Object.keys(v).some((key) => key.startsWith("$"));
-
-        if (isOperatorObject) {
-          out[`values.${k}`] = v;
-        } else if (ALWAYS_SCALAR.has(k)) {
-          // ✅ force scalar match (so ownerUserId becomes values.ownerUserId)
-          out[`values.${k}`] = v;
-        } else {
-          // ref-or-scalar match
-          out[`__REFMATCH__${k}`] = v;
-        }
-      }
-      return out;
-    }
-
-    const rewritten = rewriteNode(merged);
-
-    // Now convert __REFMATCH__ entries into $and items
-    const andParts = [];
-    for (const [k, v] of Object.entries(rewritten || {})) {
-      if (k === "$and" || k === "$or") continue;
-
-      if (k.startsWith("__REFMATCH__")) {
-        const field = k.replace("__REFMATCH__", "");
-        andParts.push(buildRefOrScalarMatch(field, v));
-      } else {
-        andParts.push({ [k]: v });
-      }
-    }
-
-    if (rewritten?.$and) andParts.push({ $and: rewritten.$and });
-    if (rewritten?.$or) andParts.push({ $or: rewritten.$or });
-
-    let mongoWhere = andParts.length ? { $and: andParts } : {};
-
-    console.log("[public/records] mongoWhere BEFORE owner:", mongoWhere);
-
-    const limit = Math.min(Number(req.query.limit || 200), 2000);
-
-    // ✅ HARD ENFORCE: if ownerUserId is provided, ALWAYS filter by values.ownerUserId
-    // IMPORTANT: do NOT merge into mongoWhere object in a way that can be lost.
-    // Build the FINAL findQuery and query with that.
-    const ownerParam = String(req.query.ownerUserId || "").trim();
-
-    const findQuery = {
-      dataTypeId: dt._id,
-      deletedAt: null,
-      ...(mongoWhere && Object.keys(mongoWhere).length ? mongoWhere : {}),
-    };
-
-    if (ownerParam) {
-      findQuery["values.ownerUserId"] = ownerParam;
-      console.log("[public/records] enforced ownerUserId:", ownerParam);
-    }
-
-    console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
-
-    const rows = await Record.find(findQuery)
-      .sort({ updatedAt: -1, createdAt: -1 })
-      .limit(limit)
-      .lean();
-
-    return res.json({ items: rows });
-  } catch (e) {
-    console.error("GET /public/records failed:", e);
-    return res.status(500).json({ items: [] });
-  }
-});
-
 
 
 function oid(x) {
@@ -1144,40 +876,6 @@ const toObjectId = (v) => {
   try { return new mongoose.Types.ObjectId(String(v)); }
   catch { return undefined; }
 };
-
-function buildRefOrScalarMatch(field, value) {
-  const ids = Array.isArray(value) ? value : [value];
-
-  const strIds = ids.map(v => String(v ?? "").trim()).filter(Boolean);
-
-  const objIds = strIds
-    .filter(v => mongoose.isValidObjectId(v))
-    .map(v => new mongoose.Types.ObjectId(v));
-
-  // ✅ fixed no-op return
-  if (!strIds.length && !objIds.length) {
-    return { _id: { $exists: true } };
-  }
-
-  const inStr = strIds.length === 1 ? strIds[0] : { $in: strIds };
-  const inObj = objIds.length === 1 ? objIds[0] : { $in: objIds };
-
-  const orParts = [];
-
-  if (strIds.length) orParts.push({ [`values.${field}`]: inStr });
-  if (objIds.length) orParts.push({ [`values.${field}`]: inObj });
-
-  if (strIds.length) orParts.push({ [`values.${field}._id`]: inStr });
-  if (objIds.length) orParts.push({ [`values.${field}._id`]: inObj });
-
-  if (strIds.length) orParts.push({ [`values.${field}Id`]: inStr });
-  if (objIds.length) orParts.push({ [`values.${field}Id`]: inObj });
-
-  if (strIds.length) orParts.push({ [`values.${field} Id`]: inStr });
-  if (objIds.length) orParts.push({ [`values.${field} Id`]: inObj });
-
-  return { $or: orParts };
-}
 
 
  app.get('/appointment-settings',
@@ -1209,277 +907,10 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 });
 
 
-//Save Videos
 
 
-// store videos in /public/uploads/videos
-const videoStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(__dirname, "public/uploads/videos")),
-  filename: (req, file, cb) => {
-    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "-");
-    cb(null, safe);
-  },
-});
-
-const uploadVideo = multer({
-  storage: videoStorage,
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB (adjust)
-});
-
-// Video upload to Cloudinary (cloud 저장 ✅)
-app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-    const b64 = req.file.buffer.toString("base64");
-    const dataUri = `data:${req.file.mimetype};base64,${b64}`;
-
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder: "suiteseat/videos",
-      resource_type: "video", // ✅ important
-    });
-
-    return res.json({
-      ok: true,
-      url: result.secure_url,       // ✅ this is what you store in Lesson Blocks
-      fileName: req.file.originalname,
-      publicId: result.public_id,
-    });
-  } catch (err) {
-    console.error("Cloudinary video upload failed", err);
-    return res.status(500).json({ error: "Video upload failed" });
-  }
-});
-
-// ✅ Signed upload signature for Cloudinary (direct-to-cloud)
-app.get("/api/cloudinary/sign", (req, res) => {
-  try {
-    const timestamp = Math.round(Date.now() / 1000);
-
-    // folder you want uploads to go into
-    const folder = req.query.folder ? String(req.query.folder) : "suiteseat/course";
-
-    // Create signature
-    const signature = cloudinary.utils.api_sign_request(
-      { timestamp, folder },
-      process.env.CLOUDINARY_API_SECRET
-    );
-
-    return res.json({
-      ok: true,
-      timestamp,
-      folder,
-      signature,
-      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-      apiKey: process.env.CLOUDINARY_API_KEY,
-    });
-  } catch (e) {
-    console.error("[cloudinary] sign failed", e);
-    return res.status(500).json({ ok: false, error: "sign_failed" });
-  }
-});
 
 
-///////////////////////////
-/////Record Stuff for themes 
-// =====================================================
-// COMPAT ROUTES for Admin UI (/api/records?dataTypeId=...)
-// Keeps your existing /api/records/:typeName routes intact
-// =====================================================
-
-// LIST by dataTypeId: /api/records?dataTypeId=...&limit=500&sort=-createdAt
-app.get("/api/records", ensureAuthenticated, async (req, res) => {
-  try {
-    const me = String(req.session.userId || "");
-    if (!me) return res.status(401).json({ items: [] });
-
-    const dataTypeId = String(req.query.dataTypeId || "").trim();
-    if (!mongoose.isValidObjectId(dataTypeId)) return res.json({ items: [] });
-
-    const dt = await DataType.findById(dataTypeId).lean();
-    if (!dt?._id) return res.json({ items: [] });
-
-    // match your existing GET /api/records/:typeName behavior
-    const nameCanon = String(dt.nameCanonical || "").toLowerCase();
-    const TOP_LEVEL = new Set([
-      "business", "calendar", "category", "service",
-      "course", "coursesection", "courselesson", "coursechapter",
-      "storetheme", "store_theme", "store theme"
-    ]);
-
-const enforcedWhere = TOP_LEVEL.has(nameCanon)
-  ? {
-      $or: [
-        { createdBy: me },
-        { "values.ownerUserId": me },
-        { "values.ownerUserId._id": me },
-        { owners: me },
-        { members: me },
-      ],
-    }
-  : await enforcedWhereForUser({ dataTypeId: String(dt._id), userId: me });
-
-    const limit = Math.min(Number(req.query.limit || 200), 2000);
-    const sort = String(req.query.sort || "-createdAt");
-    const sortObj = sort.startsWith("-")
-      ? { [sort.slice(1)]: -1 }
-      : { [sort]: 1 };
-// ✅ HARD ENFORCE: if ownerUserId is provided, ALWAYS filter by values.ownerUserId
-const ownerParam = String(req.query.ownerUserId || "").trim();
-if (ownerParam) {
-  const ownerFilter = { "values.ownerUserId": ownerParam };
-
-  // merge into mongoWhere safely
-  if (mongoWhere && Object.keys(mongoWhere).length) {
-    mongoWhere = { $and: [mongoWhere, ownerFilter] };
-  } else {
-    mongoWhere = ownerFilter;
-  }
-
-  console.log("[public/records] enforced owner filter:", ownerFilter);
-}
-
-    const rows = await Record.find({
-      dataTypeId: dt._id,
-      deletedAt: null,
-      ...enforcedWhere,
-    })
-      .sort(sortObj)
-      .limit(limit)
-      .lean();
-
-    return res.json({ items: rows });
-  } catch (e) {
-    console.error("GET /api/records (alias) failed:", e);
-    return res.status(500).json({ items: [] });
-  }
-});
-
-// CREATE by dataTypeId: POST /api/records { dataTypeId, values }
-app.post("/api/records", ensureAuthenticated, async (req, res) => {
-  try {
-    const sid = String(req.session?.userId || "");
-    if (!sid) return res.status(401).json({ items: [] });
-
-    const dataTypeId = String(req.body?.dataTypeId || "").trim();
-    if (!mongoose.isValidObjectId(dataTypeId)) return res.status(400).json({ items: [] });
-
-    const dt = await DataType.findById(dataTypeId).lean();
-    if (!dt?._id) return res.status(404).json({ items: [] });
-
-    const rawValues = req.body?.values || {};
-    const values = await normalizeValuesForType(dt._id, rawValues);
-
-    // keep your universal stamp
-    values.ownerUserId = sid;
-
-    const doc = await Record.create({
-      dataTypeId: dt._id,
-      values,
-      createdBy: sid,
-      updatedBy: sid,
-      deletedAt: null,
-    });
-
-    return res.status(201).json({ items: [doc] });
-  } catch (e) {
-    console.error("POST /api/records (alias) failed:", e);
-    return res.status(500).json({ items: [] });
-  }
-});
-
-// UPDATE by record id: PATCH /api/records/:id { values: {...} }
-app.patch("/api/records/:id", ensureAuthenticated, async (req, res) => {
-  try {
-    const me = String(req.session.userId || "");
-    const recordId = String(req.params.id || "").trim();
-    if (!me) return res.status(401).json({ items: [] });
-    if (!mongoose.isValidObjectId(recordId)) return res.status(400).json({ items: [] });
-
-    const rec = await Record.findById(recordId).lean();
-    if (!rec || rec.deletedAt) return res.status(404).json({ items: [] });
-
-    const dt = await DataType.findById(rec.dataTypeId).lean();
-    if (!dt?._id) return res.status(404).json({ items: [] });
-
-    const roles = req.session?.roles || [];
-    const isAdmin = roles.includes("admin");
-    const isPro = roles.includes("pro");
-
-    const rawValues = req.body?.values || {};
-    const values = await normalizeValuesForType(dt._id, rawValues);
-
-    const setOps = Object.fromEntries(
-      Object.entries(values).map(([k, v]) => [`values.${k}`, v])
-    );
-
-    const baseQ = { _id: recordId, dataTypeId: dt._id, deletedAt: null };
-
-    let q;
-    if (isAdmin) {
-      q = baseQ;
-    } else if (isPro) {
-      const vis = await enforcedWhereForUser({ dataTypeId: String(dt._id), userId: me });
-      q = { $and: [baseQ, vis] };
-    } else {
-      q = { ...baseQ, createdBy: me };
-    }
-
-    const updated = await Record.findOneAndUpdate(
-      q,
-      { $set: { ...setOps, updatedBy: me }, $currentDate: { updatedAt: true } },
-      { new: true }
-    ).lean();
-
-    return res.json({ items: updated ? [updated] : [] });
-  } catch (e) {
-    console.error("PATCH /api/records/:id (alias) failed:", e);
-    return res.status(500).json({ items: [] });
-  }
-});
-
-// DELETE by record id: DELETE /api/records/:id
-app.delete("/api/records/:id", ensureAuthenticated, async (req, res) => {
-  try {
-    const me = String(req.session.userId || "");
-    const recordId = String(req.params.id || "").trim();
-    if (!me) return res.status(401).json({ items: [] });
-    if (!mongoose.isValidObjectId(recordId)) return res.status(400).json({ items: [] });
-
-    const rec = await Record.findById(recordId).lean();
-    if (!rec || rec.deletedAt) return res.status(404).json({ items: [] });
-
-    const dt = await DataType.findById(rec.dataTypeId).lean();
-    if (!dt?._id) return res.status(404).json({ items: [] });
-
-    const roles = req.session?.roles || [];
-    const isAdmin = roles.includes("admin");
-    const isPro = roles.includes("pro");
-
-    const baseQ = { _id: recordId, dataTypeId: dt._id, deletedAt: null };
-
-    let q;
-    if (isAdmin) {
-      q = baseQ;
-    } else if (isPro) {
-      const vis = await enforcedWhereForUser({ dataTypeId: String(dt._id), userId: me });
-      q = { $and: [baseQ, vis] };
-    } else {
-      q = { ...baseQ, createdBy: me };
-    }
-
-    const updated = await Record.findOneAndUpdate(
-      q,
-      { $set: { deletedAt: new Date(), updatedBy: me }, $currentDate: { updatedAt: true } },
-      { new: true }
-    ).lean();
-
-    return res.json({ items: updated ? [updated] : [] });
-  } catch (e) {
-    console.error("DELETE /api/records/:id (alias) failed:", e);
-    return res.status(500).json({ items: [] });
-  }
-});
 
 
 
@@ -1823,18 +1254,13 @@ const {
 // 2) Compute a unique slug for a type, scoped to current user
 app.post('/api/slug/:typeName', ensureAuthenticated, async (req, res) => {
   try {
-    const typeName = decodeURIComponent(req.params.typeName || '').trim();
-    const baseRaw  = String(req.body.base || '');
-    const excludeId = req.body.excludeId || null;
+    const dt = await getDataTypeByName(req.params.typeName);
+    if (!dt) return res.status(404).json({ error: `Data type "${req.params.typeName}" not found` });
 
-    console.log('[slug] request', { typeName, baseRaw, excludeId, userId: req.session.userId });
-
-    const dt = await getDataTypeByName(typeName);
-    if (!dt) return res.status(404).json({ error: `Data type "${typeName}" not found` });
-
-    const base = baseRaw
+    const base = String(req.body.base || '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '');
+    const excludeId = req.body.excludeId || null;
 
     let slug = base || 'item';
     let i = 1;
@@ -1847,17 +1273,15 @@ app.post('/api/slug/:typeName', ensureAuthenticated, async (req, res) => {
     };
     if (excludeId) baseQuery._id = { $ne: excludeId };
 
+    // bump suffix until free
     while (await Record.exists(baseQuery)) {
       slug = `${base}${i++}`;
       baseQuery['values.slug'] = slug;
     }
 
-    console.log('[slug] response', { typeName, slug });
-    return res.json({ slug });
-
+    res.json({ slug });
   } catch (e) {
-    console.error('[slug] error', e);
-    return res.status(500).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -2220,7 +1644,12 @@ app.post('/api/uploads/presign', ensureAuthenticated, async (req, res) => {
 
 
 
-
+function objIdFromRef(ref) {
+  if (!ref) return null;
+  const id = (typeof ref === 'object') ? (ref._id || ref.id) : ref;
+  try { return id ? new mongoose.Types.ObjectId(String(id)) : null; }
+  catch { return null; }
+}
 
 async function enrichAppointment(rawValues) {
   // Attach Business Owner + Pro Name from Business
@@ -2373,19 +1802,12 @@ app.get('/api/me/records', ensureAuthenticated, async (req, res) => {
     const where = await normalizeWhereForType(dt._id, whereRaw);
 
     const ors = [];
-
     if (includeCreatedBy === '1' || includeCreatedBy === 'true') {
       ors.push({ createdBy: req.session.userId });
     }
-
     if (includeRefField === '1' || includeRefField === 'true') {
-      // ✅ allow values.* filters
-      if (String(myRefField).startsWith('values.')) {
-        ors.push({ [myRefField]: userId });
-      } else {
-        const mineByRef = await normalizeWhereForType(dt._id, { [myRefField]: userId });
-        ors.push(mineByRef);
-      }
+      const mineByRef = await normalizeWhereForType(dt._id, { [myRefField]: userId });
+      ors.push(mineByRef);
     }
 
     const q = { dataTypeId: dt._id, deletedAt: null, ...where };
@@ -2396,25 +1818,22 @@ app.get('/api/me/records', ensureAuthenticated, async (req, res) => {
 
     const lim = Math.min(parseInt(limit, 10) || 100, 500);
     const skp = Math.max(parseInt(skip, 10) || 0, 0);
+const rows = await Record.find(q)
+  .sort(mongoSort).skip(skp).limit(lim)
+  .populate({ path: 'createdBy', select: 'firstName lastName name' })  // <— add this
+  .lean();
 
-    const rows = await Record.find(q)
-      .sort(mongoSort).skip(skp).limit(lim)
-      .populate({ path: 'createdBy', select: 'firstName lastName name' })
-      .lean();
-
-    res.json({
-      data: rows.map(r => ({
-        _id: r._id,
-        values: r.values || {},
-        createdBy: r.createdBy ? {
-          firstName: r.createdBy.firstName || '',
-          lastName:  r.createdBy.lastName  || '',
-          name:      r.createdBy.name      || ''
-        } : null
-      }))
-    });
-
-  } catch (e) {
+res.json({
+  data: rows.map(r => ({
+    _id: r._id,
+    values: r.values || {},
+    createdBy: r.createdBy ? {
+      firstName: r.createdBy.firstName || '',
+      lastName:  r.createdBy.lastName  || '',
+      name:      r.createdBy.name      || ''
+    } : null
+  }))
+}); } catch (e) {
     console.error('GET /api/me/records failed:', e);
     res.status(500).json({ error: e.message });
   }
@@ -2422,99 +1841,52 @@ app.get('/api/me/records', ensureAuthenticated, async (req, res) => {
 
 
 
+app.post('/signup', async (req, res) => {
+  const { firstName, lastName, email, password, phone } = req.body || {};
+  if (!email || !password) return res.status(400).json({ message: 'Email & password required' });
 
-// CLIENT signup (customers)
-app.post("/signup", async (req, res) => {
-  try {
-    const { firstName, lastName, email, password, phone } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email & password required" });
-    }
+  const existing = await AuthUser.findOne({ email: String(email).toLowerCase().trim() });
+  if (existing) return res.status(409).json({ message: 'Email already in use' });
 
-    const emailNorm = String(email).toLowerCase().trim();
+  const passwordHash = await bcrypt.hash(password, 10);
+  const user = await AuthUser.create({
+    firstName, lastName, email, phone, passwordHash, roles: ['client']
+  });
 
-    const existing = await AuthUser.findOne({ email: emailNorm });
-    if (existing) return res.status(409).json({ message: "Email already in use" });
+  req.session.userId = user._id;
+  req.session.user = { email: user.email, name: user.name, roles: user.roles };
 
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    const user = await AuthUser.create({
-      firstName: firstName || "",
-      lastName: lastName || "",
-      email: emailNorm,
-      phone: phone || "",
-      passwordHash,
-      roles: ["client"],
-    });
-
-    // ✅ ALWAYS store as string + keep session shape consistent
-    req.session.userId = String(user._id);
-    req.session.roles = user.roles || ["client"];
-    req.session.user = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      roles: req.session.roles,
-    };
-
-    return res.json({
-      ok: true,
-      user: req.session.user,
-    });
-  } catch (e) {
-    console.error("[signup client] failed:", e);
-    return res.status(500).json({ message: "Signup failed" });
-  }
+  res.json({
+    ok: true,
+    user: {  _id: String(user._id), firstName, lastName, email, phone }
+  });
 });
 
-
-// PRO signup (service providers)
-app.post("/signup/pro", async (req, res) => {
+app.post('/signup/pro', async (req, res) => {
   try {
     const { firstName, lastName, email, password, phone } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ message: "Missing email/password" });
-    }
+    if (!email || !password) return res.status(400).json({ message: 'Missing email/password' });
 
-    const emailNorm = String(email).toLowerCase().trim();
-
-    const existing = await AuthUser.findOne({ email: emailNorm });
-    if (existing) return res.status(409).json({ message: "Email already in use" });
+    const existing = await AuthUser.findOne({ email: email.toLowerCase() });
+    if (existing) return res.status(409).json({ message: 'Email already in use' });
 
     const passwordHash = await bcrypt.hash(password, 10);
-
     const user = await AuthUser.create({
-      firstName: firstName || "",
-      lastName: lastName || "",
-      email: emailNorm,
-      phone: phone || "",
+      firstName, lastName,
+      email: email.toLowerCase(),
+      phone,
       passwordHash,
-      roles: ["pro"],
+      roles: ['pro']
     });
 
-    // ✅ same session shape as client
     req.session.userId = String(user._id);
-    req.session.roles = user.roles || ["pro"];
-    req.session.user = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      roles: req.session.roles,
-    };
+    req.session.user = { _id: String(user._id), firstName, lastName, email: user.email, roles: user.roles };
 
-    return res.status(201).json({
-      ok: true,
-      user: req.session.user,
-      redirect: "/appointment-settings",
-    });
+    res.status(201).json({ user: req.session.user, redirect: '/appointment-settings' });
   } catch (e) {
-    console.error("[signup pro] failed:", e);
-    return res.status(500).json({ message: "Signup failed" });
+    res.status(500).json({ message: e.message });
   }
 });
-
 
 // POST /api/login  — canonical login used everywhere
 //app.post('/api/login', async (req, res) => {
@@ -2576,10 +1948,10 @@ app.post('/api/login', async (req, res) => {
 });
 
 // after your existing app.post('/signup/pro', ...)
-//app.post('/api/signup/pro', (req, res, next) => {
- // req.url = '/signup/pro'; // reuse the same handler
-  //next();
-//});
+app.post('/api/signup/pro', (req, res, next) => {
+  req.url = '/signup/pro'; // reuse the same handler
+  next();
+});
 
 // Simple login used by availability admin page
 // Use AuthUser everywhere (not `User`) and always store the _id string
@@ -2704,64 +2076,73 @@ const { isValidObjectId } = mongoose;
 
 
 // Ensure /check-login isn’t cached (so tabs don’t get stale)
-app.get("/check-login", async (req, res) => {
-  res.set("Cache-Control", "no-store");
-
+app.get('/check-login', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const u = req.session.user;
+  if (!u) return res.json({ loggedIn:false });
+  res.json({
+    loggedIn: true,
+    userId: u._id || u.id,
+    email: u.email,
+    firstName: u.firstName,
+    name: u.name
+  });
+});
+app.get('/check-login', async (req, res) => {
   try {
-    const userId = req.session?.userId;
-    if (!userId) return res.json({ loggedIn: false });
+    if (!req.session?.userId) return res.json({ loggedIn: false });
 
-    const u = await AuthUser.findById(userId).lean();
+    const u = await AuthUser.findById(req.session.userId).lean();
     if (!u) return res.json({ loggedIn: false });
 
-    let first = String(u.firstName || u.first_name || "").trim();
-    let last  = String(u.lastName  || u.last_name  || "").trim();
+    let first = (u.firstName || u.first_name || '').trim();
+    let last  = (u.lastName  || u.last_name  || '').trim();
+    let name  = [first, last].filter(Boolean).join(' ').trim() || (u.name || '').trim();
 
-    // Optional enrich from Record if missing (keep your logic if you want)
-    if (!first || !last) {
+    // Try to enrich from Records if missing
+    if (!first || !name) {
       try {
         const profile = await Record.findOne({
           deletedAt: { $exists: false },
-          dataType: { $in: ["User", "Client", "Profile"] },
+          dataType: { $in: ['User', 'Client', 'Profile'] },
           $or: [
-            { "values.userId": String(u._id) },
-            { createdBy: u._id },
-            { "values.Email": u.email },
-            { "values.email": u.email },
-          ],
+            { 'values.userId': String(u._id) },
+            { 'values.createdBy': u._id },     // many of your records use createdBy: auth._id
+            { 'values.Email': u.email },
+            { 'values.email': u.email }
+          ]
         }).lean();
 
         const pv = profile?.values || {};
-        const pfFirst = String(pv["First Name"] || pv.firstName || pv.first_name || "").trim();
-        const pfLast  = String(pv["Last Name"]  || pv.lastName  || pv.last_name  || "").trim();
+        const pfFirst = (pv['First Name'] || pv.firstName || pv.first_name || '').trim();
+        const pfLast  = (pv['Last Name']  || pv.lastName  || pv.last_name  || '').trim();
+        const pfName  = [pfFirst, pfLast].filter(Boolean).join(' ').trim();
 
         if (!first && pfFirst) first = pfFirst;
         if (!last  && pfLast)  last  = pfLast;
+        if (!name  && pfName)  name  = pfName;
       } catch {}
     }
 
-    const name = [first, last].filter(Boolean).join(" ").trim();
+    if (!name && u.email) name = u.email.split('@')[0]; // last resort
+    const safeFirst = (first || name || 'there').split(' ')[0];
 
-    // Keep session cache in sync (optional)
-    req.session.user = req.session.user || {};
-    req.session.user.email = req.session.user.email || u.email || "";
-    req.session.user.firstName = first;
-    req.session.user.lastName  = last;
+   req.session.user = req.session.user || {};
+    if (!req.session.user.firstName) req.session.user.firstName = first;
+    if (!req.session.user.lastName)  req.session.user.lastName  = last;
+    if (!req.session.user.email)     req.session.user.email     = u.email;
 
     res.json({
       loggedIn: true,
-      userId: String(u._id),
-      user: {
-        id: String(u._id),
-        email: u.email || "",
-        firstName: first || "",
-        lastName: last || "",
-        name: name || "",
-      },
-      roles: req.session.roles || [],
+      userId:   String(u._id),
+      email:    u.email || '',
+      firstName:first || '',
+      lastName: last  || '',
+      name, // ← include full name, useful if you want it
+      roles:   req.session.roles || []
     });
   } catch (e) {
-    console.error("check-login error:", e);
+    console.error('check-login error:', e);
     res.status(500).json({ loggedIn: false });
   }
 });
@@ -3687,126 +3068,9 @@ app.post('/api/public/application', async (req, res) => {
 
 
 
-////////////////////////////////////////////////////
-                         ///Stipe
-app.post("/api/connect/create", ensureAuthenticated, async (req, res) => {
-  try {
-    const me = String(req.session.userId || "");
-    if (!me) return res.status(401).json({ error: "Unauthorized" });
 
-    // If user already has one, reuse it
-    const u = await AuthUser.findById(me).lean();
-    if (u?.stripeAccountId) {
-      return res.json({ accountId: u.stripeAccountId, reused: true });
-    }
 
-    const account = await stripe.accounts.create({
-      type: "express",
-      capabilities: { transfers: { requested: true } },
-    });
 
-    await AuthUser.findByIdAndUpdate(me, {
-      $set: {
-        stripeAccountId: account.id,
-        stripeAccountType: "express",
-        stripeOnboarded: false,
-      },
-    });
-
-    return res.json({ accountId: account.id, reused: false });
-  } catch (e) {
-    console.error("connect/create failed", e);
-    return res.status(500).json({ error: "connect_create_failed" });
-  }
-});
-    app.post("/api/rent/create-payment-intent", ensureAuthenticated, async (req, res) => {
-  try {
-    const payerId = String(req.session.userId || "");
-    if (!payerId) return res.status(401).json({ error: "Unauthorized" });
-
-    const { ownerUserId, amountCents, currency = "usd", rentId } = req.body || {};
-
-    if (!ownerUserId || !Number.isInteger(amountCents) || amountCents < 50) {
-      return res.status(400).json({ error: "missing_or_invalid_fields" });
-    }
-
-    // get owner's connected stripe account
-    const owner = await AuthUser.findById(String(ownerUserId)).lean();
-    const destination = owner?.stripeAccountId;
-    if (!destination) {
-      return res.status(400).json({ error: "owner_not_connected" });
-    }
-
-    // OPTIONAL: ensure owner completed onboarding (recommended)
-    // const acct = await stripe.accounts.retrieve(destination);
-    // if (!acct.charges_enabled) return res.status(400).json({ error: "owner_not_ready" });
-
-    // your fee (example: 3% + 30¢) — change this to what you want
-    const fee = Math.max(30, Math.round(amountCents * 0.03));
-
-    const intent = await stripe.paymentIntents.create({
-      amount: amountCents,
-      currency,
-      automatic_payment_methods: { enabled: true },
-
-      // ✅ Route money to owner + take platform fee
-      application_fee_amount: fee,
-      transfer_data: { destination },
-
-      metadata: {
-        kind: "suite_rent",
-        rentId: rentId ? String(rentId) : "",
-        ownerUserId: String(ownerUserId),
-        payerUserId: payerId,
-      },
-    });
-
-    // Return clientSecret to the frontend
-    return res.json({
-      clientSecret: intent.client_secret,
-      paymentIntentId: intent.id,
-      fee,
-    });
-  } catch (e) {
-    console.error("rent/create-payment-intent failed", e);
-    return res.status(500).json({ error: "rent_pi_failed" });
-  }
-});
-                 
-app.post("/api/connect/onboard", ensureAuthenticated, async (req, res) => {
-  try {
-    const { accountId } = req.body || {};
-    if (!accountId) return res.status(400).json({ error: "missing_accountId" });
-
-    const link = await stripe.accountLinks.create({
-      account: accountId,
-      refresh_url: "https://app.suiteseat.io/settings/payouts?refresh=1",
-      return_url: "https://app.suiteseat.io/settings/payouts?success=1",
-      type: "account_onboarding",
-    });
-
-    return res.json({ url: link.url });
-  } catch (e) {
-    console.error("connect/onboard failed", e);
-    return res.status(500).json({ error: "connect_onboard_failed" });
-  }
-});
-
-app.get("/api/connect/status/:accountId", ensureAuthenticated, async (req, res) => {
-  try {
-    const accountId = String(req.params.accountId || "");
-    const acct = await stripe.accounts.retrieve(accountId);
-
-    return res.json({
-      payoutsEnabled: !!acct.payouts_enabled,
-      chargesEnabled: !!acct.charges_enabled,
-      detailsSubmitted: !!acct.details_submitted,
-    });
-  } catch (e) {
-    console.error("connect/status failed", e);
-    return res.status(500).json({ error: "connect_status_failed" });
-  }
-});
 
 
 
