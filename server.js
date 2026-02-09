@@ -86,7 +86,6 @@ if (!recordsCtrl || typeof recordsCtrl.createRecord !== 'function') {
   process.exit(1);
 }
 
-app.set('trust proxy', 1);
 
 //////////////// Stripe
 const Stripe = require("stripe");
@@ -105,6 +104,7 @@ app.post(
   async (req, res) => {
     let event;
 
+    // 1) Verify webhook signature + build event
     try {
       event = stripe.webhooks.constructEvent(
         req.body,
@@ -117,14 +117,32 @@ app.post(
     }
 
     try {
-      // ✅ handle events here
+      // 2) Handle events
       if (event.type === "payment_intent.succeeded") {
         const pi = event.data.object;
 
         if (pi?.metadata?.kind === "suite_rent") {
-          const rentId = pi.metadata.rentId;
-          console.log("✅ Rent paid:", { rentId, pi: pi.id });
-          // TODO: update Mongo record...
+          const rentId = String(pi.metadata.rentId || "");
+          if (rentId) {
+            await Record.findByIdAndUpdate(rentId, {
+              $set: {
+                "values.Is Paid": true,
+                "values.status": "Paid",
+                "values.Date Paid": new Date(),                 // make sure this Field is a Date in your DataType
+                "values.stripePaymentIntentId": pi.id,
+                "values.lastPaymentStatus": "succeeded",
+                "values.lastPaidAmountCents": pi.amount,        // Stripe uses cents
+                "values.currency": pi.currency,
+                "values.platformFeeCents": pi.application_fee_amount || 0,
+                "values.ownerStripeAccountId": pi.metadata?.ownerUserId || "",
+              },
+            });
+          } else {
+            console.warn("suite_rent succeeded but missing rentId in metadata", {
+              pi: pi.id,
+              metadata: pi.metadata,
+            });
+          }
         }
       }
 
@@ -132,10 +150,22 @@ app.post(
         const pi = event.data.object;
 
         if (pi?.metadata?.kind === "suite_rent") {
-          console.log("❌ Rent payment failed:", {
-            rentId: pi.metadata.rentId,
-            pi: pi.id,
-          });
+          const rentId = String(pi.metadata.rentId || "");
+          if (rentId) {
+            await Record.findByIdAndUpdate(rentId, {
+              $set: {
+                "values.Is Paid": false,
+                "values.status": "Failed",
+                "values.lastPaymentStatus": "failed",
+                "values.stripePaymentIntentId": pi.id,
+              },
+            });
+          } else {
+            console.warn("suite_rent failed but missing rentId in metadata", {
+              pi: pi.id,
+              metadata: pi.metadata,
+            });
+          }
         }
       }
 
@@ -3678,32 +3708,43 @@ app.post("/api/connect/create", ensureAuthenticated, async (req, res) => {
     const me = String(req.session.userId || "");
     if (!me) return res.status(401).json({ error: "Unauthorized" });
 
-    // If user already has one, reuse it
-    const u = await AuthUser.findById(me).lean();
-    if (u?.stripeAccountId) {
-      return res.json({ accountId: u.stripeAccountId, reused: true });
+    const user = await AuthUser.findById(me);
+    if (!user) return res.status(404).json({ error: "user_not_found" });
+
+    // reuse if exists
+    if (user.stripeAccountId) {
+      return res.json({ accountId: user.stripeAccountId, reused: true });
     }
 
     const account = await stripe.accounts.create({
       type: "express",
-      capabilities: { transfers: { requested: true } },
-    });
-
-    await AuthUser.findByIdAndUpdate(me, {
-      $set: {
-        stripeAccountId: account.id,
-        stripeAccountType: "express",
-        stripeOnboarded: false,
+      email: user.email || undefined,
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
       },
     });
 
+    user.stripeAccountId = account.id;
+    user.stripeAccountType = "express";
+    user.stripeOnboarded = false;
+    await user.save();
+
     return res.json({ accountId: account.id, reused: false });
   } catch (e) {
-    console.error("connect/create failed", e);
-    return res.status(500).json({ error: "connect_create_failed" });
+    console.error("connect/create failed", e?.raw || e);
+    return res.status(500).json({
+      error: "connect_create_failed",
+      message: e?.raw?.message || e?.message || "unknown_error",
+      type: e?.raw?.type || e?.type || "",
+      code: e?.raw?.code || e?.code || "",
+    });
   }
 });
-    app.post("/api/rent/create-payment-intent", ensureAuthenticated, async (req, res) => {
+
+
+   
+app.post("/api/rent/create-payment-intent", ensureAuthenticated, async (req, res) => {
   try {
     const payerId = String(req.session.userId || "");
     if (!payerId) return res.status(401).json({ error: "Unauthorized" });
@@ -3762,19 +3803,31 @@ app.post("/api/connect/onboard", ensureAuthenticated, async (req, res) => {
     const { accountId } = req.body || {};
     if (!accountId) return res.status(400).json({ error: "missing_accountId" });
 
+    const baseUrl =
+      process.env.APP_BASE_URL ||
+      (process.env.NODE_ENV === "production"
+        ? "https://app.suiteseat.io"
+        : "http://localhost:8400");
+
     const link = await stripe.accountLinks.create({
       account: accountId,
-      refresh_url: "https://app.suiteseat.io/settings/payouts?refresh=1",
-      return_url: "https://app.suiteseat.io/settings/payouts?success=1",
+      refresh_url: `${baseUrl}/suite-settings.html?tab=settings&stripe=refresh`,
+      return_url:  `${baseUrl}/suite-settings.html?tab=settings&stripe=return`,
       type: "account_onboarding",
     });
 
     return res.json({ url: link.url });
   } catch (e) {
-    console.error("connect/onboard failed", e);
-    return res.status(500).json({ error: "connect_onboard_failed" });
+    console.error("connect/onboard failed", e?.raw || e);
+    return res.status(500).json({
+      error: "connect_onboard_failed",
+      message: e?.raw?.message || e?.message || "unknown_error",
+      type: e?.raw?.type || e?.type || "",
+      code: e?.raw?.code || e?.code || "",
+    });
   }
 });
+
 
 app.get("/api/connect/status/:accountId", ensureAuthenticated, async (req, res) => {
   try {
@@ -3794,7 +3847,391 @@ app.get("/api/connect/status/:accountId", ensureAuthenticated, async (req, res) 
 
 
 
+const crypto = require("crypto");
 
+function generatePublicToken() {
+  return crypto.randomBytes(24).toString("hex"); // 48-char token
+}
+
+
+// IMPORTANT: make sure you have this somewhere near the top of server.js
+// const { Resend } = require("resend");
+// const resend = new Resend(process.env.RESEND_API_KEY);
+
+
+
+
+// ✅ Stripe webhook MUST use raw body:
+app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
+  let event;
+
+  try {
+    const sig = req.headers["stripe-signature"];
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("[stripe webhook] signature verify failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+
+      const token = session?.metadata?.publicToken;
+      const invoiceId = session?.metadata?.invoiceRecordId;
+
+      // ✅ safest: prefer invoiceRecordId if present
+      const invoice = invoiceId
+        ? await Record.findOne({ _id: invoiceId, deletedAt: null })
+        : await Record.findOne({ deletedAt: null, "values.Public Token": token });
+
+      if (!invoice) {
+        console.warn("[stripe webhook] invoice not found", { invoiceId, token });
+        return res.json({ received: true });
+      }
+
+      // Mark paid
+      invoice.values = invoice.values || {};
+      invoice.values.Status = "paid";
+      invoice.values["Paid At"] = new Date().toISOString();
+      invoice.values["Stripe Session Id"] = session.id;
+      invoice.values["Stripe Payment Intent"] = session.payment_intent || "";
+
+      await invoice.save();
+      console.log("[stripe webhook] invoice marked paid:", invoice._id);
+    }
+
+    return res.json({ received: true });
+  } catch (err) {
+    console.error("[stripe webhook] handler error:", err);
+    return res.status(500).json({ received: true }); // don't keep retrying forever
+  }
+});
+
+
+
+app.get("/pay/invoice/:token", (req, res) => {
+  return res.sendFile(path.join(__dirname, "public", "pay-invoice.html"));
+});
+function toCents(n) {
+  const x = Number(n || 0);
+  return Math.round(x * 100);
+}
+
+function normRef(ref) {
+  if (!ref) return "";
+  if (Array.isArray(ref)) ref = ref[0];
+  if (typeof ref === "object") return String(ref._id || ref.id || "");
+  return String(ref);
+}
+
+async function getOrCreateStripeCustomerId({ email, name, suitieRecordId }) {
+  // You can store this on the Suitie Record later (recommended),
+  // but for Step 1 we’ll do a simple create/find by email.
+  if (!email) return "";
+
+  // Try finding existing customer by email (Stripe doesn’t have perfect search, but this works for many cases)
+  // Safer long-term: save customerId in your DB once created.
+  const existing = await stripe.customers.search({
+    query: `email:'${String(email).replace(/'/g, "\\'")}'`,
+    limit: 1,
+  });
+
+  if (existing.data?.length) return existing.data[0].id;
+
+  const created = await stripe.customers.create({
+    email,
+    name: name || undefined,
+    metadata: { kind: "suitie", suitieRecordId: String(suitieRecordId || "") },
+  });
+
+  return created.id;
+}
+app.post("/api/rent/invoice/send", requireLogin, async (req, res) => {
+  try {
+    const senderUserId = String(req.session.userId || "");
+    const {
+      suitieId,
+      amount,              // dollars (Number)
+      dueDate,             // ISO string or empty
+      processingFee,       // dollars (Number) OR you can compute server-side
+      memo,                // optional
+    } = req.body || {};
+
+    if (!suitieId) return res.status(400).json({ error: "missing_suitieId" });
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: "invalid_amount" });
+    }
+
+    const amountCents = toCents(amount);
+    const feeCents = toCents(processingFee || 0);
+
+    // ----- Load Suitie (for email, suite reference) -----
+    const suitie = await Record.findOne({ _id: suitieId, deletedAt: null }).lean();
+    if (!suitie) return res.status(404).json({ error: "suitie_not_found" });
+
+    const sv = suitie.values || {};
+    const suitieEmail = String(sv.Email || sv["Email"] || "").trim();
+    const suitieName =
+      String(sv.Name || sv["Name"] || sv["Full Name"] || sv["Full name"] || "").trim();
+
+    if (!suitieEmail) return res.status(400).json({ error: "suitie_missing_email" });
+
+    // ----- Resolve Suite from Suitie -----
+    const suiteId = normRef(sv.Suite || sv["Suite"]);
+    if (!suiteId) return res.status(400).json({ error: "suitie_missing_suite_ref" });
+
+    const suite = await Record.findOne({ _id: suiteId, deletedAt: null }).lean();
+    if (!suite) return res.status(404).json({ error: "suite_not_found" });
+
+    const suiteV = suite.values || {};
+
+    // ----- Resolve Location from Suite (and Payee from Location) -----
+    const locationId = normRef(suiteV.Location || suiteV["Location"]);
+    let payeeUserId = "";
+
+    if (locationId) {
+      const location = await Record.findOne({ _id: locationId, deletedAt: null }).lean();
+      const lv = location?.values || {};
+      payeeUserId = normRef(lv.Payee || lv["Payee"]);
+    }
+
+    // fallback to suite ownerUserId if no Payee set
+    if (!payeeUserId) payeeUserId = String(suiteV.ownerUserId || suiteV["ownerUserId"] || "");
+
+    if (!payeeUserId) return res.status(400).json({ error: "missing_payee_user" });
+
+    // ----- Get suite owner's connected account -----
+    const payee = await AuthUser.findById(payeeUserId).lean();
+    const destination = String(payee?.stripeAccountId || "");
+    if (!destination) return res.status(400).json({ error: "owner_not_connected" });
+
+    // Optional: require onboarding complete
+    const acct = await stripe.accounts.retrieve(destination);
+    if (!acct?.payouts_enabled) {
+      return res.status(400).json({ error: "owner_not_ready", message: "Owner must finish Stripe onboarding." });
+    }
+
+    // ----- Create/Get Stripe Customer for Suitie -----
+    const customerId = await getOrCreateStripeCustomerId({
+      email: suitieEmail,
+      name: suitieName,
+      suitieRecordId: suitieId,
+    });
+    if (!customerId) return res.status(400).json({ error: "customer_create_failed" });
+
+    // ----- Create your internal Invoice record FIRST -----
+    const crypto = require("crypto");
+    const publicToken = crypto.randomBytes(24).toString("hex");
+    const baseUrl = process.env.APP_BASE_URL || "https://app.suiteseat.io";
+    const publicUrl = `${baseUrl}/pay/invoice/${publicToken}`;
+
+    const invoiceRecord = await Record.create({
+      dataType: "Invoice",
+      createdBy: senderUserId,
+      values: {
+        Sender: senderUserId,
+        Suitie: suitieId,
+        Amount: Number(amount),
+        "Due Date": dueDate ? new Date(dueDate) : null,
+        "Sent To Email": suitieEmail,
+        Status: "draft",
+        "Public Token": publicToken,
+        "Public Url": publicUrl,
+      },
+    });
+
+    // ----- Create invoice items (visible lines) -----
+    await stripe.invoiceItems.create({
+      customer: customerId,
+      currency: "usd",
+      amount: amountCents,
+      description: "Suite Rent",
+      metadata: {
+        kind: "suite_rent",
+        invoiceRecordId: String(invoiceRecord._id),
+        suitieId: String(suitieId),
+        suiteId: String(suiteId),
+        locationId: String(locationId || ""),
+        payeeUserId: String(payeeUserId),
+      },
+    });
+
+    if (feeCents > 0) {
+      await stripe.invoiceItems.create({
+        customer: customerId,
+        currency: "usd",
+        amount: feeCents,
+        description: "Processing Fee",
+        metadata: {
+          kind: "suite_rent_fee",
+          invoiceRecordId: String(invoiceRecord._id),
+        },
+      });
+    }
+
+    // ----- Create the Stripe invoice with split routing -----
+    const stripeInvoice = await stripe.invoices.create({
+      customer: customerId,
+      collection_method: "send_invoice",
+      // either days_until_due OR due_date. We'll use due_date if provided.
+      ...(dueDate ? { due_date: Math.floor(new Date(dueDate).getTime() / 1000) } : { days_until_due: 3 }),
+      auto_advance: true, // auto-finalize
+      // Split routing:
+      transfer_data: { destination },         // owner gets the main funds
+      application_fee_amount: feeCents,       // you get your fee (must match your "Processing Fee" line)
+      on_behalf_of: destination,              // helps make it feel like it's on behalf of owner
+      metadata: {
+        kind: "suite_rent_invoice",
+        invoiceRecordId: String(invoiceRecord._id),
+        suitieId: String(suitieId),
+        payeeUserId: String(payeeUserId),
+      },
+      description: memo ? String(memo).slice(0, 500) : undefined,
+    });
+
+    // Finalize + send (creates hosted invoice URL, sends email)
+    const finalized = await stripe.invoices.finalizeInvoice(stripeInvoice.id);
+    await stripe.invoices.sendInvoice(finalized.id);
+
+    // Save Stripe info on your internal record
+    await Record.findByIdAndUpdate(invoiceRecord._id, {
+      $set: {
+        "values.Status": "sent",
+        "values.stripeInvoiceId": finalized.id,
+        "values.stripeHostedInvoiceUrl": finalized.hosted_invoice_url || "",
+        "values.stripeInvoicePdf": finalized.invoice_pdf || "",
+      },
+    });
+
+    const updated = await Record.findById(invoiceRecord._id).lean();
+    return res.json({ items: [updated] }); // ✅ your preferred shape for list-like responses
+  } catch (err) {
+    console.error("[rent/invoice/send] error", err);
+    return res.status(500).json({ error: "invoice_send_failed" });
+  }
+});
+app.get("/api/public/invoice/:token", async (req, res) => {
+  try {
+    const token = String(req.params.token || "");
+
+    const invoice = await Record.findOne({
+      deletedAt: null,
+      dataType: "Invoice",
+      "values.Public Token": token,
+    }).lean();
+
+    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+    return res.json({ item: invoice });
+  } catch (e) {
+    console.error("[public invoice] error", e);
+    return res.status(500).json({ message: "Failed to load invoice" });
+  }
+});
+
+app.post("/api/stripe/connect/start", requireLogin, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+
+    // 1) load user (however you do it)
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ ok: false, message: "User not found" });
+
+    // 2) create Stripe account if missing
+    let acctId = user.stripeAccountId;
+    if (!acctId) {
+      const account = await stripe.accounts.create({
+        type: "express",
+        // email helps Stripe prefill
+        email: user.email || undefined,
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true },
+        },
+      });
+
+      acctId = account.id;
+      user.stripeAccountId = acctId;
+      await user.save();
+    }
+
+    // 3) create onboarding link
+    const accountLink = await stripe.accountLinks.create({
+      account: acctId,
+      refresh_url: `${APP_URL}/suite-settings.html?tab=settings&stripe=refresh`,
+      return_url: `${APP_URL}/suite-settings.html?tab=settings&stripe=return`,
+      type: "account_onboarding",
+    });
+
+    return res.json({ ok: true, url: accountLink.url });
+  } catch (err) {
+    console.error("[stripe connect start]", err);
+    return res.status(500).json({ ok: false, message: "Stripe connect start failed" });
+  }
+});
+
+app.get("/api/stripe/connect/status", requireLogin, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ ok: false, message: "User not found" });
+
+    if (!user.stripeAccountId) {
+      return res.json({
+        ok: true,
+        connected: false,
+        chargesEnabled: false,
+        payoutsEnabled: false,
+        detailsSubmitted: false,
+      });
+    }
+
+    const acct = await stripe.accounts.retrieve(user.stripeAccountId);
+
+    // store latest
+    user.stripeChargesEnabled = !!acct.charges_enabled;
+    user.stripePayoutsEnabled = !!acct.payouts_enabled;
+    user.stripeDetailsSubmitted = !!acct.details_submitted;
+    await user.save();
+
+    return res.json({
+      ok: true,
+      connected: true,
+      chargesEnabled: !!acct.charges_enabled,
+      payoutsEnabled: !!acct.payouts_enabled,
+      detailsSubmitted: !!acct.details_submitted,
+    });
+  } catch (err) {
+    console.error("[stripe connect status]", err);
+    return res.status(500).json({ ok: false, message: "Stripe connect status failed" });
+  }
+});
+
+//Charge rent as a direct charge on the connected account
+async function chargeRent(req, res) {
+  const { stripeAccountId, amountCents, currency = "usd" } = req.body;
+
+  const paymentIntent = await stripe.paymentIntents.create(
+    {
+      amount: amountCents,
+      currency,
+      // optional: platform fee (only if you charge one)
+      // application_fee_amount: 233, // example fee in cents
+      automatic_payment_methods: { enabled: true },
+    },
+    {
+      // THIS is what makes it a direct charge on the suite owner's account
+      stripeAccount: stripeAccountId,
+    }
+  );
+
+  res.json({ clientSecret: paymentIntent.client_secret });
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //                                 //Page Routes
