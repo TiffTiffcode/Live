@@ -89,20 +89,15 @@ if (!recordsCtrl || typeof recordsCtrl.createRecord !== 'function') {
 
 //////////////// Stripe
 const Stripe = require("stripe");
-// ✅ define isProd FIRST
-const isProd = process.env.NODE_ENV === "production";
-
-// ✅ choose the correct secret key
-const stripeSecretKey = isProd
-  ? process.env.STRIPE_SECRET_KEY_LIVE
-  : process.env.STRIPE_SECRET_KEY;
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 
 if (!stripeSecretKey) {
-  console.error("❌ Missing Stripe secret key for this environment.");
-  // optional: process.exit(1);
+  console.error("❌ Missing STRIPE_SECRET_KEY");
+  process.exit(1);
 }
 
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
+const isProd = process.env.NODE_ENV === "production";
 
 // decide which webhook secret to use
 // ✅ choose the correct webhook signing secret
@@ -237,23 +232,19 @@ const mongoSessionUrl =
   process.env.DB_URI ||                    // just in case
   'mongodb://127.0.0.1:27017/suiteseat';   // local fallback
 
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  store: MongoStore.create({ mongoUrl: mongoSessionUrl }),
+  cookie: {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    maxAge: 1000 * 60 * 60 * 24 * 7,
+  },
+}));
 
-    store: MongoStore.create({ mongoUrl: mongoSessionUrl }),
-
-    cookie: {
-      httpOnly: true,
-      secure: isProd,                 // true on https
-      sameSite: isProd ? "none" : "lax",
-      domain: isProd ? ".suiteseat.io" : undefined, // ✅ important for app.suiteseat.io + suiteseat.io
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    },
-  })
-);
 // after body parsers & session middleware:
 app.use(require('./routes/auth'));
 app.use("/api/holds", holdsRouter);
