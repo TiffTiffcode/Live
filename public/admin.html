@@ -31,13 +31,142 @@ git push origin master
 
 
 git add server.js
-git commit -m "Allow CORS from suiteseat.io"
+git commit -m "Stripe 1"
 git push origin master
 
 
 git add .
 git commit -m "fixed display images 9"
 git push 
+
+Build a system to allow owners to send invoice to suitie
+-user clicks Pay Rent
+
+frontend calls /api/stripe/create-rent-intent
+
+Stripe Elements confirms payment
+
+show success screen
+
+backend webhook finalizes “Paid”
+
+Step 4 — Suite Owner dashboard (minimum)
+
+Show:
+
+unpaid rent rows
+
+paid rent rows
+
+totals for the month
+
+This is just pulling rent records from Mongo and displaying status.
+
+
+Suite Owner sets rent (creates Suite Rent record with Amount, Due Date, Owner, Payee)
+
+Suitie pays rent (your /api/rent/create-payment-intent returns clientSecret)
+
+Suite Owner dashboard updates after webhook sets Paid
+
+
+Best testing setup for your app
+
+To properly test the multi-party flow, create 3 test users in your app:
+
+A) “Platform Admin” (you)
+
+This is just your app login to control everything.
+
+B) Test suite owner (connected account)
+
+Create a user like: owner1@test.com
+
+Click “Enable payments” → complete Connect onboarding (test)
+
+Confirm /api/connect/status shows payouts enabled.
+
+C) Test suitie (payer)
+
+Create a suitie record with email: payer1@test.com
+
+This is who receives invoice + pays.
+
+Then:
+
+Log in as Owner
+
+Send invoice to Suitie
+
+Copy hosted invoice URL from your invoice record
+
+Open hosted invoice URL in an incognito window
+
+Pay with 4242…
+
+Webhook updates your Invoice record to “paid”
+
+That’s the end-to-end test.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+The clean flow (what you should build next)
+Step A — Suite owner accepts a Suitie + sets the rent amount
+
+When that happens, do this in the backend:
+
+Create a Suite Rent record with:
+
+Owner (User ref)
+
+Payee (User ref) OR Suitie (ref) (you already have both fields in Suite Rent)
+
+Amount (Number)
+
+Due Date (Date)
+
+Period Start / Period End (Date)
+
+status = "Unpaid"
+
+Is Paid = false
+
+ownerStripeAccountId (Text) (optional — you can derive from Owner user too)
+
+Update the Suitie record:
+
+set values["Suite Rent"] = <suiteRentRecordId>
+
+Now you finally have a real rentId that your Stripe route can use.
+
+Step B — Suitie pays rent
+
+Frontend sends:
+
+rentId (the Suite Rent record id)
+
+ownerUserId
+
+amountCents
+
+Your existing route /api/rent/create-payment-intent is perfect for that.
+
+Webhook updates the Suite Rent record → Paid ✅
+
+
+
 -->
  
 
