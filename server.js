@@ -85,6 +85,7 @@ if (!recordsCtrl || typeof recordsCtrl.createRecord !== 'function') {
   console.error('controllers/records.js export is', recordsCtrl);
   process.exit(1);
 }
+const PUBLIC_DIR = path.join(__dirname, "public");
 
 
 //////////////// Stripe
@@ -232,22 +233,39 @@ const mongoSessionUrl =
   process.env.DB_URI ||                    // just in case
   'mongodb://127.0.0.1:27017/suiteseat';   // local fallback
 
+app.set("trust proxy", 1); // IMPORTANT for Render/HTTPS cookies
+
 app.use(session({
-  secret: process.env.SESSION_SECRET,
+  secret: process.env.SESSION_SECRET || "dev_secret_change_me",
   resave: false,
   saveUninitialized: false,
-  store: MongoStore.create({ mongoUrl: mongoSessionUrl }),
   cookie: {
     httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    maxAge: 1000 * 60 * 60 * 24 * 7,
+    secure: process.env.NODE_ENV === "production", // true on Render
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   },
 }));
+
 
 // after body parsers & session middleware:
 app.use(require('./routes/auth'));
 app.use("/api/holds", holdsRouter);
+
+
+app.get("/api/me", async (req, res) => {
+  try {
+    const userId = req.session?.userId;
+    if (!userId) return res.json({ ok: true, user: null });
+
+    const user = await User.findById(userId).lean();
+    if (!user) return res.json({ ok: true, user: null });
+
+    return res.json({ ok: true, user });
+  } catch (err) {
+    console.error("[/api/me] error:", err);
+    return res.status(500).json({ ok: false, error: "Internal Server Error" });
+  }
+});
 
 // ----------hold helper ----------
 
@@ -4231,7 +4249,8 @@ app.post("/api/stripe/connect/start", requireLogin, async (req, res) => {
     const userId = req.session.userId;
 
     // 1) load user (however you do it)
-    const user = await User.findById(userId);
+  const user = await AuthUser.findById(userId);
+
     if (!user) return res.status(404).json({ ok: false, message: "User not found" });
 
     // 2) create Stripe account if missing
@@ -4270,7 +4289,8 @@ app.post("/api/stripe/connect/start", requireLogin, async (req, res) => {
 app.get("/api/stripe/connect/status", requireLogin, async (req, res) => {
   try {
     const userId = req.session.userId;
-    const user = await User.findById(userId);
+  const user = await AuthUser.findById(userId);
+
     if (!user) return res.status(404).json({ ok: false, message: "User not found" });
 
     if (!user.stripeAccountId) {
@@ -4404,3 +4424,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api', holdsRouter); 
 
+app.use((err, _req, res, _next) => {
+  console.error("🔥 UNHANDLED ERROR:", err);
+  res.status(500).json({ error: "internal_error", message: err.message });
+});
