@@ -94,6 +94,8 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 
 
 //////////////// Stripe
+const isProd = process.env.NODE_ENV === "production";
+
 const Stripe = require("stripe");
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 
@@ -238,7 +240,6 @@ const mongoSessionUrl =
   'mongodb://127.0.0.1:27017/suiteseat';   // local fallback
 
 
-const isProd = process.env.NODE_ENV === "production";
 
 app.set("trust proxy", 1);
 
