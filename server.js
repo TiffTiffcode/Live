@@ -243,11 +243,14 @@ app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  proxy: true,
   cookie: {
-    secure: true,         // HTTPS only
-    sameSite: "lax",      // works for subdomains
-    domain: ".suiteseat.io"
-  }
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",        // ✅ IMPORTANT (was "lax")
+    domain: ".suiteseat.io",  // ✅ share across www + api + app
+    maxAge: 1000 * 60 * 60 * 24 * 7,
+  },
 }));
 
 
