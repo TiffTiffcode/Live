@@ -253,20 +253,7 @@ app.use(require('./routes/auth'));
 app.use("/api/holds", holdsRouter);
 
 
-app.get("/api/me", async (req, res) => {
-  try {
-    const userId = req.session?.userId;
-    if (!userId) return res.json({ ok: true, user: null });
 
-    const user = await User.findById(userId).lean();
-    if (!user) return res.json({ ok: true, user: null });
-
-    return res.json({ ok: true, user });
-  } catch (err) {
-    console.error("[/api/me] error:", err);
-    return res.status(500).json({ ok: false, error: "Internal Server Error" });
-  }
-});
 
 // ----------hold helper ----------
 
@@ -539,6 +526,34 @@ function uploadBufferToCloudinary(buffer, { folder = "suiteseat", public_id } = 
     stream.end(buffer);
   });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1884,12 +1899,12 @@ app.post('/api/slug/:typeName', ensureAuthenticated, async (req, res) => {
     let slug = base || 'item';
     let i = 1;
 
-    const baseQuery = {
-      dataTypeId: dt._id,
-      'values.slug': slug,
-      createdBy: req.session.userId,
-      deletedAt: null
-    };
+const baseQuery = {
+  dataTypeId: dt._id,
+  'values.slug': slug,
+  deletedAt: null
+};
+
     if (excludeId) baseQuery._id = { $ne: excludeId };
 
     while (await Record.exists(baseQuery)) {
@@ -2360,13 +2375,29 @@ app.post(
 );
 
 
-app.get("/api/me", (req,res)=>{
-  if (!req.session?.userId) return res.status(401).json({ loggedIn:false });
-  res.json({ 
-    id: req.session.userId, 
-    ...req.session.user      // set this during /login
-  });
-}); 
+app.get("/api/me", async (req, res) => {
+  try {
+    const userId = req.session?.userId;
+    if (!userId) return res.json({ ok: true, user: null });
+
+    const u = await AuthUser.findById(userId).lean();
+    if (!u) return res.json({ ok: true, user: null });
+
+    return res.json({
+      ok: true,
+      user: {
+        _id: String(u._id),
+        email: u.email || "",
+        firstName: u.firstName || "",
+        lastName: u.lastName || "",
+        roles: Array.isArray(req.session?.roles) ? req.session.roles : [],
+      },
+    });
+  } catch (e) {
+    console.error("[/api/me] error:", e);
+    return res.status(500).json({ ok: false, user: null, error: "Internal Server Error" });
+  }
+});
 
 // Returns { user: { _id, firstName, lastName, email, phone, address, profilePhoto } }
 app.get('/api/users/me', ensureAuthenticated, async (req, res) => {
@@ -3290,10 +3321,82 @@ const RESERVED = new Set([
   'favicon.ico','robots.txt','sitemap.xml'
 ]);
 
+function normSlug(s = "") {
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9\-]/g, "");
+}
+
+// ✅ PUBLIC: check if a slug is taken globally (any user)
+// GET /public/slug-check?type=Business&slug=my-slug
+app.get("/public/slug-check", async (req, res) => {
+  try {
+    const typeName = String(req.query.type || "").trim();
+    const rawSlug  = String(req.query.slug || "").trim();
+
+    if (!typeName || !rawSlug) {
+      return res.json({ ok: true, taken: false });
+    }
+
+    const wanted = normSlug(rawSlug);
+
+    const dt = await DataType.findOne({
+      $or: [{ name: typeName }, { nameCanonical: typeName.toLowerCase() }],
+      deletedAt: null,
+    }).lean();
+
+    if (!dt?._id) return res.json({ ok: true, taken: false });
+
+    // check common slug storage patterns (yours is values.slug)
+    const exists = await Record.exists({
+      dataTypeId: dt._id,
+      deletedAt: null,
+      $or: [
+        { "values.slug": wanted },
+        { "values.Slug": wanted },
+        { "values.bookingSlug": wanted },
+        { "values.businessSlug": wanted },
+        { "values.locationSlug": wanted },
+        { "values['Business Slug']": wanted },
+        { "values['Location Slug']": wanted },
+      ],
+    });
+
+    return res.json({ ok: true, taken: !!exists });
+  } catch (e) {
+    console.error("[public/slug-check] error", e);
+    return res.status(500).json({ ok: false, taken: false });
+  }
+});
 
 
 
+function slugify(str = "") {
+  return String(str)
+    .toLowerCase()
+    .trim()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
 
+async function generateSlugForType(typeName, base, excludeId = null) {
+  const resp = await fetch(`/api/slug/${encodeURIComponent(typeName)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      base: String(base || ""),
+      excludeId: excludeId || null, // keep null on create
+    }),
+  });
+
+  const out = await resp.json().catch(() => ({}));
+  return out?.slug || "";
+}
 
 
 
