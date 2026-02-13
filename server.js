@@ -13,6 +13,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'https://suiteseat.io',      // 👈 add this
   'https://www.suiteseat.io',
+  'https://api.suiteseat.io',
   'https://app.suiteseat.io',
   ...(process.env.CORS_ORIGIN || '')
     .split(',')
@@ -237,6 +238,7 @@ const mongoSessionUrl =
   process.env.DB_URI ||                    // just in case
   'mongodb://127.0.0.1:27017/suiteseat';   // local fallback
 
+
 app.set("trust proxy", 1);
 
 app.use(session({
@@ -245,13 +247,13 @@ app.use(session({
   saveUninitialized: false,
   proxy: true,
   cookie: {
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",        // ✅ IMPORTANT (was "lax")
-    domain: ".suiteseat.io",  // ✅ share across www + api + app
-    maxAge: 1000 * 60 * 60 * 24 * 7,
-  },
+    secure: isProd,                 // true on https
+    sameSite: isProd ? "none" : "lax", // ✅ IMPORTANT for cross-origin fetch
+    domain: isProd ? ".suiteseat.io" : undefined,
+  }
 }));
+
+
 
 
 // after body parsers & session middleware:
