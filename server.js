@@ -26,15 +26,19 @@ app.set('trust proxy', 1);
 // 🔹 CORS – single source of truth
 app.use(cors({
   origin(origin, callback) {
+    // allow non-browser calls (curl/postman) with no origin
     if (!origin) return callback(null, true);
+
     if (allowedOrigins.includes(origin)) return callback(null, true);
+
     console.log("CORS blocked origin:", origin);
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type", "Accept", "Authorization"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Accept", "Authorization", "X-Requested-With"],
 }));
+
 
 app.options("*", cors({
   origin(origin, callback) {
@@ -233,20 +237,17 @@ const mongoSessionUrl =
   process.env.DB_URI ||                    // just in case
   'mongodb://127.0.0.1:27017/suiteseat';   // local fallback
 
-app.set("trust proxy", 1); // IMPORTANT on Render/behind proxy
+app.set("trust proxy", 1);
 
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  proxy: true,
   cookie: {
-    httpOnly: true,
-    secure: true,        // REQUIRED for SameSite=None in production
-    sameSite: "none",    // REQUIRED so suiteseat.io can send cookie to Render
-    // optional:
-    // maxAge: 1000 * 60 * 60 * 24 * 7,
-  },
+    secure: true,         // HTTPS only
+    sameSite: "lax",      // works for subdomains
+    domain: ".suiteseat.io"
+  }
 }));
 
 
