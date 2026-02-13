@@ -233,17 +233,19 @@ const mongoSessionUrl =
   process.env.DB_URI ||                    // just in case
   'mongodb://127.0.0.1:27017/suiteseat';   // local fallback
 
-app.set("trust proxy", 1);
+app.set("trust proxy", 1); // IMPORTANT on Render/behind proxy
 
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  proxy: true,
   cookie: {
     httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    domain: ".suiteseat.io", // ✅ share across www + api
+    secure: true,        // REQUIRED for SameSite=None in production
+    sameSite: "none",    // REQUIRED so suiteseat.io can send cookie to Render
+    // optional:
+    // maxAge: 1000 * 60 * 60 * 24 * 7,
   },
 }));
 
