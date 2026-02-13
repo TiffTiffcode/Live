@@ -103,7 +103,6 @@ if (!stripeSecretKey) {
 }
 
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
-const isProd = process.env.NODE_ENV === "production";
 
 // decide which webhook secret to use
 // ✅ choose the correct webhook signing secret
@@ -239,20 +238,22 @@ const mongoSessionUrl =
   'mongodb://127.0.0.1:27017/suiteseat';   // local fallback
 
 
+const isProd = process.env.NODE_ENV === "production";
+
 app.set("trust proxy", 1);
 
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  proxy: true,
+  proxy: true, // ✅ important behind Render proxy
   cookie: {
-    secure: isProd,                 // true on https
-    sameSite: isProd ? "none" : "lax", // ✅ IMPORTANT for cross-origin fetch
-    domain: isProd ? ".suiteseat.io" : undefined,
-  }
+    secure: isProd,                       // ✅ true on https
+    sameSite: isProd ? "none" : "lax",    // ✅ REQUIRED for cross-site fetch w/ credentials
+    domain: isProd ? ".suiteseat.io" : undefined, // ✅ share across subdomains
+    httpOnly: true,
+  },
 }));
-
 
 
 
