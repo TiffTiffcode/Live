@@ -233,16 +233,16 @@ const mongoSessionUrl =
 
 app.set("trust proxy", 1);
 
+
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  proxy: true, // ✅ important behind Render proxy
+  proxy: true,
   cookie: {
-     secure: true,                       // ✅ true on https
-   sameSite: "none",
-    domain: isProd ? ".suiteseat.io" : undefined, // ✅ share across subdomains
     httpOnly: true,
+    secure: isProd,       // true on https
+    sameSite: isProd ? "none" : "lax",
   },
 }));
 
