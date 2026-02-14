@@ -15,6 +15,8 @@ const allowedOrigins = [
   'https://www.suiteseat.io',
   'https://api.suiteseat.io',
   'https://app.suiteseat.io',
+  'https://live-353x.onrender.com',
+
   ...(process.env.CORS_ORIGIN || '')
     .split(',')
     .map(s => s.trim())
@@ -27,29 +29,17 @@ app.set('trust proxy', 1);
 // 🔹 CORS – single source of truth
 app.use(cors({
   origin(origin, callback) {
-    // allow non-browser calls (curl/postman) with no origin
     if (!origin) return callback(null, true);
-
     if (allowedOrigins.includes(origin)) return callback(null, true);
-
     console.log("CORS blocked origin:", origin);
-    return callback(new Error("Not allowed by CORS"));
+    return callback(new Error("Not allowed by CORS: " + origin));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Accept", "Authorization", "X-Requested-With"],
 }));
 
-
-app.options("*", cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true,
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type", "Accept", "Authorization"],
-}));
+app.options("*", (req, res) => res.sendStatus(204));
 
 
 const mongoose = require('mongoose');
@@ -249,8 +239,8 @@ app.use(session({
   saveUninitialized: false,
   proxy: true, // ✅ important behind Render proxy
   cookie: {
-    secure: isProd,                       // ✅ true on https
-    sameSite: isProd ? "none" : "lax",    // ✅ REQUIRED for cross-site fetch w/ credentials
+     secure: true,                       // ✅ true on https
+   sameSite: "none",
     domain: isProd ? ".suiteseat.io" : undefined, // ✅ share across subdomains
     httpOnly: true,
   },
@@ -259,7 +249,8 @@ app.use(session({
 
 
 // after body parsers & session middleware:
-app.use(require('./routes/auth'));
+app.use("/api", require("./routes/auth"));
+
 app.use("/api/holds", holdsRouter);
 
 
