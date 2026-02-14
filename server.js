@@ -2885,32 +2885,6 @@ req.session.user   = { email: auth.email, firstName: auth.firstName || '', lastN
 });
 
 
-app.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    const user = await AuthUser.findOne({ email: String(email).toLowerCase().trim() });
-    if (!user) return res.status(401).json({ message: "Invalid email or password" });
-
-    const ok = await bcrypt.compare(String(password || ""), user.passwordHash);
-    if (!ok) return res.status(401).json({ message: "Invalid email or password" });
-
-    req.session.userId = String(user._id);
-    req.session.roles  = Array.isArray(user.roles) ? user.roles : ["pro"];
-    req.session.user   = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName || "",
-      lastName: user.lastName || "",
-    };
-
-    await req.session.save();
-
-    return res.json({ ok: true, loggedIn: true, user: req.session.user });
-  } catch (e) {
-    console.error("/login error", e);
-    return res.status(500).json({ message: "Login failed" });
-  }
-});
 
 
 
