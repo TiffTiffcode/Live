@@ -82,7 +82,9 @@ app.options("*", cors(corsOptions));
 app.use(cors(corsOptions));
 //////////////// Stripe
 const isProd = process.env.NODE_ENV === "production";
-
+function isProd() {
+  return process.env.NODE_ENV === "production";
+}
 const Stripe = require("stripe");
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 
@@ -1251,37 +1253,36 @@ function buildRefOrScalarMatch(field, value) {
 
 app.post("/api/upload", upload.single("file"), async (req, res) => {
   try {
-    console.log("✅ HIT IMAGE UPLOAD /api/upload", {
-      folder: req.query.folder,
-      name: req.file?.originalname,
-      bytes: req.file?.size,
-      mimetype: req.file?.mimetype,
-    });
-
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    if (!String(req.file.mimetype || "").startsWith("image/")) {
-      return res.status(400).json({ error: "Images only. Use /api/uploads/video for video." });
+    const folder = String(req.query.folder || "suiteseat/uploads");
+
+    // ✅ PRODUCTION → Cloudinary
+    if (isProd()) {
+      const result = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          {
+            folder,
+            resource_type: "image",
+          },
+          (err, result) => (err ? reject(err) : resolve(result))
+        );
+        stream.end(req.file.buffer);
+      });
+
+      return res.json({
+        url: result.secure_url,      // ✅ save this in DB
+        public_id: result.public_id, // optional (for future delete)
+      });
     }
 
-    const folder = req.query.folder ? String(req.query.folder) : "suiteseat/uploads";
+    // ✅ LOCAL DEV → keep your current local uploads logic
+    // If you want local to also use Cloudinary, remove this entire block and always use Cloudinary.
+    // Example local fallback:
+    return res.status(500).json({ error: "Local upload not implemented in this snippet" });
 
-    const b64 = req.file.buffer.toString("base64");
-    const dataUri = `data:${req.file.mimetype};base64,${b64}`;
-
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder,
-      resource_type: "image",
-    });
-
-    return res.json({
-      ok: true,
-      handler: "cloudinary_image_upload",
-      url: result.secure_url,
-      publicId: result.public_id,
-    });
   } catch (err) {
-    console.error("Cloudinary image upload failed", err);
+    console.error("[upload] failed", err);
     return res.status(500).json({ error: "Upload failed" });
   }
 });
