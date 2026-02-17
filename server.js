@@ -1260,7 +1260,6 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    // optional: block non-images here so video doesn't go through this route
     if (!String(req.file.mimetype || "").startsWith("image/")) {
       return res.status(400).json({ error: "Images only. Use /api/uploads/video for video." });
     }
@@ -1286,6 +1285,7 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
     return res.status(500).json({ error: "Upload failed" });
   }
 });
+
 
 app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
   try {
@@ -1319,6 +1319,7 @@ app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
     return res.status(500).json({ error: "Video upload failed" });
   }
 });
+
 
 
 //Save Videos
@@ -2262,48 +2263,6 @@ app.get('/api/public/business/by-slug/:slug', async (req, res) => {
 
 
 
-// --- Generate a presigned PUT URL to upload directly to S3 ---
-app.post('/api/uploads/presign', ensureAuthenticated, async (req, res) => {
-  try {
-    if (!s3) {
-      // S3 not configured — short-circuit with a helpful error
-      return res.status(503).json({
-        error: 's3_not_configured',
-        message: 'AWS credentials/region not set. Set AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and S3_BUCKET_NAME in .env.',
-      });
-    }
-
-    const { filename, contentType } = req.body || {};
-    if (!filename || !contentType) {
-      return res.status(400).json({ error: 'filename_and_contentType_required' });
-    }
-
-    // build a unique object key, keep a simple /uploads/ prefix
-    const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : '';
-    const key = `uploads/${uuid()}${ext ? '.' + ext : ''}`;
-
-    // Create the presign command (public-read is optional; remove ACL if your bucket is private)
-    const command = new PutObjectCommand({
-      Bucket: process.env.S3_BUCKET_NAME,
-      Key: key,
-      ContentType: contentType,
-      ACL: 'public-read',
-    });
-
-    // 60 seconds is usually fine for browser upload
-    const url = await getSignedUrl(s3, command, { expiresIn: 60 });
-
-    // Where the file will be publicly reachable (adjust if using CloudFront)
-    const publicUrl = process.env.PUBLIC_BASE_URL
-      ? `${process.env.PUBLIC_BASE_URL}/${key}`
-      : `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
-
-    return res.json({ url, key, publicUrl });
-  } catch (e) {
-    console.error('presign failed:', e);
-    return res.status(500).json({ error: 'presign_failed' });
-  }
-});
 
 
 
