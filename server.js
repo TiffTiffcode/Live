@@ -4,51 +4,24 @@ const path = require("path");
 
 const express = require('express');
 const app = express();  
-const cors = require('cors');
+const cors = require("cors");
 
 const allowedOrigins = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:5500',
-  'http://localhost:5173',
-  'https://suiteseat.io',      // 👈 add this
-  'https://www.suiteseat.io',
-  'https://api.suiteseat.io',
-  'https://app.suiteseat.io',
-  'https://live-353x.onrender.com',
-
-  ...(process.env.CORS_ORIGIN || '')
-    .split(',')
-    .map(s => s.trim())
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5500",
+  "http://localhost:5173",
+  "http://localhost:8400",
+  "https://suiteseat.io",
+  "https://www.suiteseat.io",
+  ...(process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((s) => s.trim())
     .filter(Boolean),
 ];
 
-
 app.set('trust proxy', 1);
 
-// 🔹 CORS – single source of truth
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    console.log("CORS blocked origin:", origin);
-    return callback(new Error("Not allowed by CORS: " + origin));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Accept", "Authorization", "X-Requested-With"],
-}));
-
-app.options("*", cors({
-  origin(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("Not allowed by CORS: " + origin));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Accept", "Authorization", "X-Requested-With"],
-}));
 
 const mongoose = require('mongoose');
 const fs = require('fs');
@@ -91,31 +64,22 @@ if (!recordsCtrl || typeof recordsCtrl.createRecord !== 'function') {
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 
-import cors from "cors";
 
-const ALLOWED_ORIGINS = new Set([
-  "https://suiteseat.io",
-  "https://www.suiteseat.io",
-  "http://localhost:8400",
-]);
-
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // allow curl/postman/no-origin
-      if (!origin) return cb(null, true);
-      return cb(null, ALLOWED_ORIGINS.has(origin));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Accept"],
-  })
-);
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // postman/curl
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    console.log("CORS blocked origin:", origin);
+    return cb(new Error("Not allowed by CORS: " + origin));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Accept", "Authorization", "X-Requested-With"],
+};
 
 // IMPORTANT for preflight
-app.options("*", cors());
-
-
+app.options("*", cors(corsOptions));
+app.use(cors(corsOptions));
 //////////////// Stripe
 const isProd = process.env.NODE_ENV === "production";
 
@@ -274,9 +238,9 @@ app.use(session({
   proxy: true,
   cookie: {
     httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    domain: ".suiteseat.io",
+    secure: isProd,                 // ✅ only true in prod
+    sameSite: isProd ? "none" : "lax",
+    domain: isProd ? ".suiteseat.io" : undefined,
   },
 }));
 
