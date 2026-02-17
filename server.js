@@ -1,7 +1,7 @@
 //C:\Users\tiffa\OneDrive\Desktop\Live\server.js
 require("dotenv").config();
 const path = require("path");
-const IS_PROD = process.env.NODE_ENV === "production";
+
 
 const express = require('express');
 const app = express();  
@@ -94,7 +94,7 @@ if (!stripeSecretKey) {
 }
 
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
-
+const IS_PROD = process.env.NODE_ENV === "production";
 // decide which webhook secret to use
 const webhookSecret = IS_PROD
   ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
@@ -457,27 +457,7 @@ app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] })
 app.use('/qassets', express.static(path.join(__dirname, 'qassets')));
 
 
-// ---------- sockets / server listen ----------
-const http = require('http');
-const { Server } = require('socket.io');
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: true, credentials: true } });
 
-io.on('connection', (socket) => {
-  console.log('🔌 socket connected', socket.id);
-  socket.on('disconnect', () => console.log('🔌 socket disconnected', socket.id));
-});
-
-// ✅ DB connect then start server (single place)
-connectDB()
-  .then(() => {
-    const PORT = process.env.PORT || 8400;
-    server.listen(PORT, () => console.log(`✅ API listening on http://localhost:${PORT}`));
-  })
-  .catch(err => {
-    console.error('❌ DB connect failed', err);
-    process.exit(1);
-  });
 // --- View engine (only if you actually render EJS views) ---
 app.set("view engine", "ejs");
 app.set('views', path.join(__dirname, 'views'));
@@ -1304,6 +1284,15 @@ app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
   }
 });
 
+const uploadImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB images
+});
+
+const uploadVideo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB videos
+});
 
 // ✅ Signed upload signature for Cloudinary (direct-to-cloud)
 app.get("/api/cloudinary/sign", (req, res) => {
@@ -4376,3 +4365,26 @@ app.use((err, _req, res, _next) => {
   console.error("🔥 UNHANDLED ERROR:", err);
   res.status(500).json({ error: "internal_error", message: err.message });
 });
+
+
+// ---------- sockets / server listen ----------
+const http = require('http');
+const { Server } = require('socket.io');
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: true, credentials: true } });
+
+io.on('connection', (socket) => {
+  console.log('🔌 socket connected', socket.id);
+  socket.on('disconnect', () => console.log('🔌 socket disconnected', socket.id));
+});
+
+// ✅ DB connect then start server (single place)
+connectDB()
+  .then(() => {
+    const PORT = process.env.PORT || 8400;
+    server.listen(PORT, () => console.log(`✅ API listening on http://localhost:${PORT}`));
+  })
+  .catch(err => {
+    console.error('❌ DB connect failed', err);
+    process.exit(1);
+  });
