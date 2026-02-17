@@ -81,10 +81,7 @@ const corsOptions = {
 app.options("*", cors(corsOptions));
 app.use(cors(corsOptions));
 //////////////// Stripe
-//const isProd = process.env.NODE_ENV === "production";
-function isProd() {
-  return process.env.NODE_ENV === "production";
-}
+
 const Stripe = require("stripe");
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 
@@ -96,10 +93,7 @@ if (!stripeSecretKey) {
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
 
 // decide which webhook secret to use
-// ✅ choose the correct webhook signing secret
-const webhookSecret = isProd
-  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
-  : process.env.STRIPE_WEBHOOK_SECRET;
+
 
 if (!webhookSecret) {
   console.warn("⚠️ Missing Stripe webhook secret for this environment.");
@@ -233,6 +227,14 @@ const mongoSessionUrl =
 app.set("trust proxy", 1);
 
 
+const IS_PROD = process.env.NODE_ENV === "production";
+
+// Stripe
+const webhookSecret = IS_PROD
+  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
+  : process.env.STRIPE_WEBHOOK_SECRET;
+
+// Sessions
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
@@ -240,11 +242,12 @@ app.use(session({
   proxy: true,
   cookie: {
     httpOnly: true,
-    secure: isProd,                 // ✅ only true in prod
-    sameSite: isProd ? "none" : "lax",
-    domain: isProd ? ".suiteseat.io" : undefined,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? "none" : "lax",
+    domain: IS_PROD ? ".suiteseat.io" : undefined,
   },
 }));
+
 
 
 
@@ -1250,10 +1253,15 @@ function buildRefOrScalarMatch(field, value) {
 );
 
 // 1) Upload a single file, return a URL
-
 app.post("/api/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    // ✅ hard fail if Cloudinary isn't configured
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      console.error("❌ Cloudinary env vars missing");
+      return res.status(500).json({ error: "Cloudinary not configured" });
+    }
 
     const folder = String(req.query.folder || "suiteseat/uploads");
 
@@ -1271,6 +1279,7 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
     return res.status(500).json({ error: "Upload failed" });
   }
 });
+
 
 
 app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
@@ -1305,27 +1314,6 @@ app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
     return res.status(500).json({ error: "Video upload failed" });
   }
 });
-
-
-
-//Save Videos
-
-
-// store videos in /public/uploads/videos
-const videoStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(__dirname, "public/uploads/videos")),
-  filename: (req, file, cb) => {
-    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "-");
-    cb(null, safe);
-  },
-});
-
-const uploadVideo = multer({
-  storage: videoStorage,
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB (adjust)
-});
-
-
 
 
 // ✅ Signed upload signature for Cloudinary (direct-to-cloud)
@@ -3711,140 +3699,6 @@ app.post('/api/appointments/book', async (req, res) => {
     res.status(500).json({ message: 'Booking failed' });
   }
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                           //LinkPage 
- 
-
-
-// POST /uploads/linkpage-bg
-app.post("/uploads/linkpage-bg", uploadMemory.single("image"), async (req, res) => {
-  try {
-    if (!req.file?.buffer) return res.status(400).json({ error: "No file" });
-
-    const uploaded = await uploadBufferToCloudinary(req.file.buffer, {
-      folder: "suiteseat/linkpages/bg",
-    });
-
-    res.json({ url: uploaded.secure_url });
-  } catch (e) {
-    console.error("/uploads/linkpage-bg failed:", e);
-    res.status(500).json({ error: "upload_failed" });
-  }
-});
-
-app.post("/uploads/linkpage-header", uploadMemory.single("image"), async (req, res) => {
-  try {
-    if (!req.file?.buffer) return res.status(400).json({ error: "No file" });
-
-    const uploaded = await uploadBufferToCloudinary(req.file.buffer, {
-      folder: "suiteseat/linkpages/header",
-    });
-
-    res.json({ url: uploaded.secure_url });
-  } catch (e) {
-    console.error("/uploads/linkpage-header failed:", e);
-    res.status(500).json({ error: "upload_failed" });
-  }
-});
-
-// PUBLIC: Create an Application record (no login required)
-app.post('/api/public/application', async (req, res) => {
-  try {
-    const values = (req.body && req.body.values) || {};
-
-    console.log('[PUBLIC Application] incoming values:', values);
-
-    const dt = await getDataTypeByNameLoose('Application');
-    if (!dt?._id) {
-      console.warn('[PUBLIC Application] DataType "Application" not found');
-      return res.status(404).json({ message: 'Application DataType not found' });
-    }
-
-    let createdBy = undefined;
-
-    // Try to infer owner from Suite reference
-    let suiteId = null;
-    const suiteRef = values.Suite;
-    if (suiteRef) {
-      if (typeof suiteRef === 'string') {
-        suiteId = suiteRef;
-      } else if (typeof suiteRef === 'object') {
-        suiteId = suiteRef._id || suiteRef.id || null;
-      }
-    }
-
-    if (suiteId && mongoose.isValidObjectId(suiteId)) {
-      try {
-        const suiteDT = await getDataTypeByNameLoose('Suite');
-        if (suiteDT?._id) {
-          const suiteRec = await Record.findOne({
-            _id: suiteId,
-            dataTypeId: suiteDT._id,
-            deletedAt: null
-          }).lean();
-
-          if (suiteRec?.createdBy) {
-            createdBy = suiteRec.createdBy;
-          }
-        }
-      } catch (e) {
-        console.warn('[PUBLIC Application] could not resolve suite owner:', e);
-      }
-    }
-
-    const doc = {
-      values,
-      dataTypeId: dt._id,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    if (createdBy) {
-      doc.createdBy = createdBy;
-    }
-
-    const rec = await Record.create(doc);
-    console.log('[PUBLIC Application] saved', {
-      id: String(rec._id),
-      suiteId,
-      createdBy: rec.createdBy
-    });
-
-    res.json({ _id: rec._id, values: rec.values });
-  } catch (e) {
-    console.error('[PUBLIC Application] error', e);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
