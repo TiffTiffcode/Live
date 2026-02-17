@@ -81,7 +81,7 @@ const corsOptions = {
 app.options("*", cors(corsOptions));
 app.use(cors(corsOptions));
 //////////////// Stripe
-const isProd = process.env.NODE_ENV === "production";
+//const isProd = process.env.NODE_ENV === "production";
 function isProd() {
   return process.env.NODE_ENV === "production";
 }
@@ -1257,30 +1257,15 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 
     const folder = String(req.query.folder || "suiteseat/uploads");
 
-    // ✅ PRODUCTION → Cloudinary
-    if (isProd()) {
-      const result = await new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          {
-            folder,
-            resource_type: "image",
-          },
-          (err, result) => (err ? reject(err) : resolve(result))
-        );
-        stream.end(req.file.buffer);
-      });
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder, resource_type: "image" },
+        (err, result) => (err ? reject(err) : resolve(result))
+      );
+      stream.end(req.file.buffer);
+    });
 
-      return res.json({
-        url: result.secure_url,      // ✅ save this in DB
-        public_id: result.public_id, // optional (for future delete)
-      });
-    }
-
-    // ✅ LOCAL DEV → keep your current local uploads logic
-    // If you want local to also use Cloudinary, remove this entire block and always use Cloudinary.
-    // Example local fallback:
-    return res.status(500).json({ error: "Local upload not implemented in this snippet" });
-
+    return res.json({ url: result.secure_url, public_id: result.public_id });
   } catch (err) {
     console.error("[upload] failed", err);
     return res.status(500).json({ error: "Upload failed" });
