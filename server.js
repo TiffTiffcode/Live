@@ -91,6 +91,31 @@ if (!recordsCtrl || typeof recordsCtrl.createRecord !== 'function') {
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 
+import cors from "cors";
+
+const ALLOWED_ORIGINS = new Set([
+  "https://suiteseat.io",
+  "https://www.suiteseat.io",
+  "http://localhost:8400",
+]);
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // allow curl/postman/no-origin
+      if (!origin) return cb(null, true);
+      return cb(null, ALLOWED_ORIGINS.has(origin));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Accept"],
+  })
+);
+
+// IMPORTANT for preflight
+app.options("*", cors());
+
+
 //////////////// Stripe
 const isProd = process.env.NODE_ENV === "production";
 
@@ -249,8 +274,9 @@ app.use(session({
   proxy: true,
   cookie: {
     httpOnly: true,
-    secure: isProd,       // true on https
-    sameSite: isProd ? "none" : "lax",
+    secure: true,
+    sameSite: "none",
+    domain: ".suiteseat.io",
   },
 }));
 
@@ -2885,6 +2911,32 @@ req.session.user   = { email: auth.email, firstName: auth.firstName || '', lastN
 });
 
 
+app.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    const user = await AuthUser.findOne({ email: String(email).toLowerCase().trim() });
+    if (!user) return res.status(401).json({ message: "Invalid email or password" });
+
+    const ok = await bcrypt.compare(String(password || ""), user.passwordHash);
+    if (!ok) return res.status(401).json({ message: "Invalid email or password" });
+
+    req.session.userId = String(user._id);
+    req.session.roles  = Array.isArray(user.roles) ? user.roles : ["pro"];
+    req.session.user   = {
+      _id: String(user._id),
+      email: user.email,
+      firstName: user.firstName || "",
+      lastName: user.lastName || "",
+    };
+
+    await req.session.save();
+
+    return res.json({ ok: true, loggedIn: true, user: req.session.user });
+  } catch (e) {
+    console.error("/login error", e);
+    return res.status(500).json({ message: "Login failed" });
+  }
+});
 
 
 
