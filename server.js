@@ -1,6 +1,7 @@
 //C:\Users\tiffa\OneDrive\Desktop\Live\server.js
 require("dotenv").config();
 const path = require("path");
+const IS_PROD = process.env.NODE_ENV === "production";
 
 const express = require('express');
 const app = express();  
@@ -245,8 +246,6 @@ const mongoSessionUrl =
 
 app.set("trust proxy", 1);
 
-
-const IS_PROD = process.env.NODE_ENV === "production";
 
 
 
