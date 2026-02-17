@@ -244,8 +244,6 @@ const mongoSessionUrl =
 
 
 
-app.set("trust proxy", 1);
-
 
 
 
