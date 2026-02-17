@@ -26,8 +26,10 @@ app.set('trust proxy', 1);
 const mongoose = require('mongoose');
 const fs = require('fs');
 const multer = require("multer");
-const upload = multer({ storage: multer.memoryStorage() });
-
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
@@ -93,6 +95,23 @@ if (!stripeSecretKey) {
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
 
 // decide which webhook secret to use
+const webhookSecret = IS_PROD
+  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
+  : process.env.STRIPE_WEBHOOK_SECRET;
+
+// Sessions
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  proxy: true,
+  cookie: {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? "none" : "lax",
+    domain: IS_PROD ? ".suiteseat.io" : undefined,
+  },
+}));
 
 
 if (!webhookSecret) {
@@ -228,26 +247,6 @@ app.set("trust proxy", 1);
 
 
 const IS_PROD = process.env.NODE_ENV === "production";
-
-// Stripe
-const webhookSecret = IS_PROD
-  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
-  : process.env.STRIPE_WEBHOOK_SECRET;
-
-// Sessions
-app.use(session({
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  proxy: true,
-  cookie: {
-    httpOnly: true,
-    secure: IS_PROD,
-    sameSite: IS_PROD ? "none" : "lax",
-    domain: IS_PROD ? ".suiteseat.io" : undefined,
-  },
-}));
-
 
 
 
@@ -507,10 +506,10 @@ app.use(publicRoutes);
 
 
 // Multer in-memory (NO local disk)
-const uploadMemory = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-});
+//const uploadMemory = multer({
+ // storage: multer.memoryStorage(),
+//  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+//});
 
 // Helper: upload a buffer to Cloudinary
 function uploadBufferToCloudinary(buffer, { folder = "suiteseat", public_id } = {}) {
@@ -1257,12 +1256,6 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    // ✅ hard fail if Cloudinary isn't configured
-    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-      console.error("❌ Cloudinary env vars missing");
-      return res.status(500).json({ error: "Cloudinary not configured" });
-    }
-
     const folder = String(req.query.folder || "suiteseat/uploads");
 
     const result = await new Promise((resolve, reject) => {
@@ -1279,7 +1272,6 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
     return res.status(500).json({ error: "Upload failed" });
   }
 });
-
 
 
 app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
