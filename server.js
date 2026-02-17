@@ -1251,21 +1251,35 @@ function buildRefOrScalarMatch(field, value) {
 
 app.post("/api/upload", upload.single("file"), async (req, res) => {
   try {
+    console.log("✅✅✅ HIT CLOUDINARY /api/upload", {
+      folder: req.query.folder,
+      name: req.file?.originalname,
+      bytes: req.file?.size,
+    });
+
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const folder = req.query.folder
+      ? String(req.query.folder)
+      : "suiteseat/uploads";
 
     const b64 = req.file.buffer.toString("base64");
     const dataUri = `data:${req.file.mimetype};base64,${b64}`;
 
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder: "suiteseat/uploads",
-    });
+    const result = await cloudinary.uploader.upload(dataUri, { folder });
 
-    return res.json({ url: result.secure_url });
+    return res.json({
+      ok: true,
+      handler: "cloudinary_api_upload",
+      url: result.secure_url,
+      publicId: result.public_id,
+    });
   } catch (err) {
     console.error("Cloudinary upload failed", err);
     return res.status(500).json({ error: "Upload failed" });
   }
 });
+
 
 
 //Save Videos
