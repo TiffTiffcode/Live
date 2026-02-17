@@ -1251,35 +1251,74 @@ function buildRefOrScalarMatch(field, value) {
 
 app.post("/api/upload", upload.single("file"), async (req, res) => {
   try {
-    console.log("✅✅✅ HIT CLOUDINARY /api/upload", {
+    console.log("✅ HIT IMAGE UPLOAD /api/upload", {
       folder: req.query.folder,
       name: req.file?.originalname,
       bytes: req.file?.size,
+      mimetype: req.file?.mimetype,
     });
 
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    const folder = req.query.folder
-      ? String(req.query.folder)
-      : "suiteseat/uploads";
+    // optional: block non-images here so video doesn't go through this route
+    if (!String(req.file.mimetype || "").startsWith("image/")) {
+      return res.status(400).json({ error: "Images only. Use /api/uploads/video for video." });
+    }
+
+    const folder = req.query.folder ? String(req.query.folder) : "suiteseat/uploads";
 
     const b64 = req.file.buffer.toString("base64");
     const dataUri = `data:${req.file.mimetype};base64,${b64}`;
 
-    const result = await cloudinary.uploader.upload(dataUri, { folder });
+    const result = await cloudinary.uploader.upload(dataUri, {
+      folder,
+      resource_type: "image",
+    });
 
     return res.json({
       ok: true,
-      handler: "cloudinary_api_upload",
+      handler: "cloudinary_image_upload",
       url: result.secure_url,
       publicId: result.public_id,
     });
   } catch (err) {
-    console.error("Cloudinary upload failed", err);
+    console.error("Cloudinary image upload failed", err);
     return res.status(500).json({ error: "Upload failed" });
   }
 });
 
+app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
+  try {
+    console.log("✅ HIT VIDEO UPLOAD /api/uploads/video", {
+      folder: req.query.folder,
+      name: req.file?.originalname,
+      bytes: req.file?.size,
+      mimetype: req.file?.mimetype,
+    });
+
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const folder = req.query.folder ? String(req.query.folder) : "suiteseat/videos";
+
+    const b64 = req.file.buffer.toString("base64");
+    const dataUri = `data:${req.file.mimetype};base64,${b64}`;
+
+    const result = await cloudinary.uploader.upload(dataUri, {
+      folder,
+      resource_type: "video",
+    });
+
+    return res.json({
+      ok: true,
+      handler: "cloudinary_video_upload",
+      url: result.secure_url,
+      publicId: result.public_id,
+    });
+  } catch (err) {
+    console.error("Cloudinary video upload failed", err);
+    return res.status(500).json({ error: "Video upload failed" });
+  }
+});
 
 
 //Save Videos
@@ -1299,30 +1338,8 @@ const uploadVideo = multer({
   limits: { fileSize: 200 * 1024 * 1024 }, // 200MB (adjust)
 });
 
-// Video upload to Cloudinary (cloud 저장 ✅)
-app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    const b64 = req.file.buffer.toString("base64");
-    const dataUri = `data:${req.file.mimetype};base64,${b64}`;
 
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder: "suiteseat/videos",
-      resource_type: "video", // ✅ important
-    });
-
-    return res.json({
-      ok: true,
-      url: result.secure_url,       // ✅ this is what you store in Lesson Blocks
-      fileName: req.file.originalname,
-      publicId: result.public_id,
-    });
-  } catch (err) {
-    console.error("Cloudinary video upload failed", err);
-    return res.status(500).json({ error: "Video upload failed" });
-  }
-});
 
 // ✅ Signed upload signature for Cloudinary (direct-to-cloud)
 app.get("/api/cloudinary/sign", (req, res) => {
