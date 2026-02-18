@@ -11,6 +11,9 @@ const path = require("path");
 
 const express = require('express');
 const app = express();  
+const BUILD_TAG = `serverjs-${Date.now()}`; // temporary
+app.get("/api/version", (_req, res) => res.json({ ok: true, BUILD_TAG }));
+
 const cors = require("cors");
 
 const allowedOrigins = [
