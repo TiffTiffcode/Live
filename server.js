@@ -20,17 +20,19 @@ const path = require("path");
 
 const express = require('express');
 const app = express();  
-const BUILD_TAG = `serverjs-${Date.now()}`; // temporary
-// ✅ Debug/version stamp (leave this in until you're done debugging)
+const BUILD_TAG = `serverjs-${Date.now()}`;
+
 app.get("/api/version", (req, res) => {
   return res.json({
     ok: true,
-    when: new Date().toISOString(),
-    nodeEnv: process.env.NODE_ENV,
-    renderCommit: process.env.RENDER_GIT_COMMIT || null,
+    buildTag: BUILD_TAG,
+    nodeEnv: process.env.NODE_ENV || null,
+    renderCommit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || null,
     serviceId: process.env.RENDER_SERVICE_ID || null,
+    time: new Date().toISOString(),
   });
 });
+
 
 const cors = require("cors");
 
@@ -1151,9 +1153,6 @@ function buildRefOrScalarMatch(field, value) {
     res.sendFile(path.join(__dirname, 'views', 'appointment-settings.html'));
   }
 );
-app.get("/api/version", (req, res) => {
-  res.json({ ok: true, version: process.env.RENDER_GIT_COMMIT || "no-commit", time: new Date().toISOString() });
-});
 
 // 1) Upload a single file, return a URL
 const uploadMem = multer({ storage: multer.memoryStorage() });
@@ -1182,13 +1181,18 @@ app.post("/api/upload", uploadMem.single("file"), async (req, res) => {
     });
 
     // ✅ IMPORTANT: return secure_url
-    return res.json({
-      ok: true,
-      secure_url: result.secure_url,
-      public_id: result.public_id,
-      width: result.width,
-      height: result.height,
-    });
+// ✅ IMPORTANT: return a consistent shape
+return res.json({
+  ok: true,
+  handler: "cloudinary_image_upload",
+  url: result.secure_url,        // ✅ what your front-end wants
+  secure_url: result.secure_url, // optional compatibility
+  publicId: result.public_id,
+  width: result.width,
+  height: result.height,
+});
+
+
   } catch (err) {
     console.error("Upload error:", err);
     return res.status(500).json({ ok: false, error: "Upload failed" });
