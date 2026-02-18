@@ -1144,30 +1144,36 @@ function buildRefOrScalarMatch(field, value) {
 );
 
 // 1) Upload a single file, return a URL
-app.post("/api/upload", upload.single("file"), async (req, res) => {
-  console.log("🔥 HIT /api/upload CLOUDINARY ROUTE", {
-        hasFile: !!req.file,
-    name: req.file?.originalname,
-    bytes: req.file?.size,
-    folder: req.query.folder
-  });
-  try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+const uploadMem = multer({ storage: multer.memoryStorage() });
 
-    const folder = String(req.query.folder || "suiteseat/uploads");
+app.post("/api/upload", uploadMem.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "No file uploaded" });
+
+    const folder = req.query.folder || "suiteseat/uploads";
 
     const result = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { folder, resource_type: "image" },
-        (err, result) => (err ? reject(err) : resolve(result))
+        {
+          folder,
+          resource_type: "image",
+        },
+        (err, out) => (err ? reject(err) : resolve(out))
       );
       stream.end(req.file.buffer);
     });
 
-    return res.json({ url: result.secure_url, public_id: result.public_id });
+    // ✅ IMPORTANT: return secure_url
+    return res.json({
+      ok: true,
+      secure_url: result.secure_url,
+      public_id: result.public_id,
+      width: result.width,
+      height: result.height,
+    });
   } catch (err) {
-    console.error("[upload] failed", err);
-    return res.status(500).json({ error: "Upload failed" });
+    console.error("Upload error:", err);
+    return res.status(500).json({ ok: false, error: "Upload failed" });
   }
 });
 
