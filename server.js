@@ -1,5 +1,14 @@
 //C:\Users\tiffa\OneDrive\Desktop\Live\server.js
 require("dotenv").config();
+// near the top of server.js
+console.log("[boot] cloudinary env check", {
+  CLOUDINARY_URL: !!process.env.CLOUDINARY_URL,
+  CLOUDINARY_CLOUD_NAME: !!process.env.CLOUDINARY_CLOUD_NAME,
+  CLOUDINARY_API_KEY: !!process.env.CLOUDINARY_API_KEY,
+  CLOUDINARY_API_SECRET: !!process.env.CLOUDINARY_API_SECRET,
+  NODE_ENV: process.env.NODE_ENV,
+});
+
 const IS_PROD = process.env.NODE_ENV === "production";
 // decide which webhook secret to use
 const webhookSecret = IS_PROD
@@ -1142,11 +1151,20 @@ function buildRefOrScalarMatch(field, value) {
     res.sendFile(path.join(__dirname, 'views', 'appointment-settings.html'));
   }
 );
+app.get("/api/version", (req, res) => {
+  res.json({ ok: true, version: process.env.RENDER_GIT_COMMIT || "no-commit", time: new Date().toISOString() });
+});
 
 // 1) Upload a single file, return a URL
 const uploadMem = multer({ storage: multer.memoryStorage() });
 
 app.post("/api/upload", uploadMem.single("file"), async (req, res) => {
+    console.log("[upload] cloudinary env check", {
+    CLOUDINARY_URL: !!process.env.CLOUDINARY_URL,
+    CLOUDINARY_CLOUD_NAME: !!process.env.CLOUDINARY_CLOUD_NAME,
+    CLOUDINARY_API_KEY: !!process.env.CLOUDINARY_API_KEY,
+    CLOUDINARY_API_SECRET: !!process.env.CLOUDINARY_API_SECRET,
+  });
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "No file uploaded" });
 
