@@ -12,7 +12,16 @@ const path = require("path");
 const express = require('express');
 const app = express();  
 const BUILD_TAG = `serverjs-${Date.now()}`; // temporary
-app.get("/api/version", (_req, res) => res.json({ ok: true, BUILD_TAG }));
+// ✅ Debug/version stamp (leave this in until you're done debugging)
+app.get("/api/version", (req, res) => {
+  return res.json({
+    ok: true,
+    when: new Date().toISOString(),
+    nodeEnv: process.env.NODE_ENV,
+    renderCommit: process.env.RENDER_GIT_COMMIT || null,
+    serviceId: process.env.RENDER_SERVICE_ID || null,
+  });
+});
 
 const cors = require("cors");
 
