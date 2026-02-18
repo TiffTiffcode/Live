@@ -1232,6 +1232,12 @@ function buildRefOrScalarMatch(field, value) {
 
 // 1) Upload a single file, return a URL
 app.post("/api/upload", upload.single("file"), async (req, res) => {
+  console.log("🔥 HIT /api/upload CLOUDINARY ROUTE", {
+        hasFile: !!req.file,
+    name: req.file?.originalname,
+    bytes: req.file?.size,
+    folder: req.query.folder
+  });
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
