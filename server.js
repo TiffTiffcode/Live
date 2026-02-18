@@ -1,5 +1,11 @@
 //C:\Users\tiffa\OneDrive\Desktop\Live\server.js
 require("dotenv").config();
+const IS_PROD = process.env.NODE_ENV === "production";
+// decide which webhook secret to use
+const webhookSecret = IS_PROD
+  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
+  : process.env.STRIPE_WEBHOOK_SECRET;
+
 const path = require("path");
 
 
@@ -94,11 +100,6 @@ if (!stripeSecretKey) {
 }
 
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
-const IS_PROD = process.env.NODE_ENV === "production";
-// decide which webhook secret to use
-const webhookSecret = IS_PROD
-  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
-  : process.env.STRIPE_WEBHOOK_SECRET;
 
 // Sessions
 app.use(session({
@@ -106,6 +107,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   proxy: true,
+  store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }), // ✅ add this
   cookie: {
     httpOnly: true,
     secure: IS_PROD,
@@ -483,10 +485,10 @@ app.use(publicRoutes);
 
 
 // Multer in-memory (NO local disk)
-//const uploadMemory = multer({
- // storage: multer.memoryStorage(),
-//  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-//});
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+ limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
 
 // Helper: upload a buffer to Cloudinary
 function uploadBufferToCloudinary(buffer, { folder = "suiteseat", public_id } = {}) {
