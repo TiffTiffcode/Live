@@ -1253,6 +1253,7 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 });
 
 
+
 app.post("/api/uploads/video", upload.single("file"), async (req, res) => {
   try {
     console.log("✅ HIT VIDEO UPLOAD /api/uploads/video", {
@@ -2281,7 +2282,8 @@ async function enrichAppointment(rawValues) {
 app.post(
   "/update-user-profile",
   ensureAuthenticated,
-  uploadMemory.single("profilePhoto"),
+ upload.single("profilePhoto")
+,
   async (req, res) => {
     try {
       const userId = req.session.userId;
