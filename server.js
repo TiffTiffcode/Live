@@ -1081,6 +1081,10 @@ app.get("/public/records", async (req, res) => {
     }
 
     console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
+if (canonName(dataTypeName) === "service") {
+  const rows = await Record.find({ dataTypeId: dt._id, deletedAt: null }).limit(limit).lean();
+  return res.json({ items: rows });
+}
 
     const rows = await Record.find(findQuery)
       .sort({ updatedAt: -1, createdAt: -1 })
