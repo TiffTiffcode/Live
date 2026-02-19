@@ -980,15 +980,14 @@ app.get("/public/records", async (req, res) => {
     console.log("[public/records] ownerUserId query:", req.query.ownerUserId || null);
 
     // find the datatype
-    const dt = await DataType.findOne({
-      $or: [{ name: dataTypeName }, { nameCanonical: dataTypeName.toLowerCase() }],
-      deletedAt: null,
-    }).lean();
-
+    // ✅ find the datatype (loose match like /api/records/:typeName)
+    const dt = await getDataTypeByNameLoose(dataTypeName);
     if (!dt?._id) {
-      console.log("[public/records] datatype not found");
+      console.log("[public/records] datatype not found (loose)", dataTypeName);
       return res.json({ items: [] });
     }
+
+console.log("[public/records] dt found:", { id: String(dt._id), name: dt.name, canon: dt.nameCanonical });
 
     // -----------------------------
     // Convert merged filters into Mongo filters
