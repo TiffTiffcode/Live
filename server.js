@@ -1113,37 +1113,57 @@ const toObjectId = (v) => {
 
 function buildRefOrScalarMatch(field, value) {
   const ids = Array.isArray(value) ? value : [value];
-
   const strIds = ids.map(v => String(v ?? "").trim()).filter(Boolean);
 
   const objIds = strIds
     .filter(v => mongoose.isValidObjectId(v))
     .map(v => new mongoose.Types.ObjectId(v));
 
-  // ✅ fixed no-op return
   if (!strIds.length && !objIds.length) {
     return { _id: { $exists: true } };
   }
 
-  const inStr = strIds.length === 1 ? strIds[0] : { $in: strIds };
-  const inObj = objIds.length === 1 ? objIds[0] : { $in: objIds };
+  // ✅ IMPORTANT:
+  // - Equality matches scalar storage: "id"
+  // - $in matches array storage: ["id"]
+  const eqStr = strIds.length === 1 ? strIds[0] : null;
+  const inStr = { $in: strIds };
+
+  const eqObj = objIds.length === 1 ? objIds[0] : null;
+  const inObj = { $in: objIds };
 
   const orParts = [];
 
+  // values.Field can be scalar OR array
+  if (eqStr) orParts.push({ [`values.${field}`]: eqStr });
   if (strIds.length) orParts.push({ [`values.${field}`]: inStr });
+
+  if (eqObj) orParts.push({ [`values.${field}`]: eqObj });
   if (objIds.length) orParts.push({ [`values.${field}`]: inObj });
 
+  // values.Field._id can be scalar OR array
+  if (eqStr) orParts.push({ [`values.${field}._id`]: eqStr });
   if (strIds.length) orParts.push({ [`values.${field}._id`]: inStr });
+
+  if (eqObj) orParts.push({ [`values.${field}._id`]: eqObj });
   if (objIds.length) orParts.push({ [`values.${field}._id`]: inObj });
 
+  // Id aliases
+  if (eqStr) orParts.push({ [`values.${field}Id`]: eqStr });
   if (strIds.length) orParts.push({ [`values.${field}Id`]: inStr });
+
+  if (eqObj) orParts.push({ [`values.${field}Id`]: eqObj });
   if (objIds.length) orParts.push({ [`values.${field}Id`]: inObj });
 
+  if (eqStr) orParts.push({ [`values.${field} Id`]: eqStr });
   if (strIds.length) orParts.push({ [`values.${field} Id`]: inStr });
+
+  if (eqObj) orParts.push({ [`values.${field} Id`]: eqObj });
   if (objIds.length) orParts.push({ [`values.${field} Id`]: inObj });
 
   return { $or: orParts };
 }
+
 
 
  app.get('/appointment-settings',
