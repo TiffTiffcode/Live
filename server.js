@@ -216,7 +216,33 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), asyn
 });
 
 
+//Bookin Payment intent 
+app.post("/api/fee-intent", async (req, res) => {
+  try {
+    const { businessId, calendarId, dateISO, timeHHMM } = req.body || {};
 
+    // ✅ $2.33 -> 233 cents
+    const amount = 233;
+
+    const intent = await stripe.paymentIntents.create({
+      amount,
+      currency: "usd",
+      automatic_payment_methods: { enabled: true },
+      metadata: {
+        businessId: businessId || "",
+        calendarId: calendarId || "",
+        dateISO: dateISO || "",
+        timeHHMM: timeHHMM || "",
+        kind: "service_fee",
+      },
+    });
+
+    return res.json({ clientSecret: intent.client_secret });
+  } catch (e) {
+    console.error("fee-intent error:", e);
+    return res.status(500).json({ error: "Failed to create fee intent" });
+  }
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

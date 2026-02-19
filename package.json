@@ -12,6 +12,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.876.0",
     "@aws-sdk/s3-request-presigner": "^3.876.0",
+    "@stripe/react-stripe-js": "^5.6.0",
+    "@stripe/stripe-js": "^8.7.0",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.9.0",
     "connect-mongo": "^5.1.0",
