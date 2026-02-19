@@ -984,6 +984,22 @@ app.get("/public/records", async (req, res) => {
 const dt = await getDataTypeByNameLoose(dataTypeName);
 if (!dt?._id) return res.json({ items: [] });
 
+console.log("[public/records] dt found:", {
+  id: String(dt._id),
+  name: dt.name,
+  canon: dt.nameCanonical,
+  isPublicReadable: dt.isPublicReadable,
+});
+
+console.log("[DB inside route] using db:", mongoose.connection.db?.databaseName);
+
+const count = await Record.countDocuments({
+  dataTypeId: dt._id,
+  deletedAt: null,
+});
+
+console.log("[public/records] countInThisDB:", count, "dtId:", String(dt._id));
+
 // ✅ dynamic public permission check
 if (!dt.isPublicReadable) {
   console.log("[public/records] blocked by dt.isPublicReadable:", dataTypeName);
@@ -1121,47 +1137,43 @@ function buildRefOrScalarMatch(field, value) {
     .filter(v => mongoose.isValidObjectId(v))
     .map(v => new mongoose.Types.ObjectId(v));
 
-  if (!strIds.length && !objIds.length) {
-    return { _id: { $exists: true } };
-  }
+  if (!strIds.length && !objIds.length) return { _id: { $exists: true } };
 
-  // ✅ IMPORTANT:
-  // - Equality matches scalar storage: "id"
-  // - $in matches array storage: ["id"]
   const eqStr = strIds.length === 1 ? strIds[0] : null;
   const inStr = { $in: strIds };
 
   const eqObj = objIds.length === 1 ? objIds[0] : null;
   const inObj = { $in: objIds };
 
+  // 🔁 Generic paths we’ll try (values + top-level)
+  const paths = [
+    `values.${field}`,
+    `values.${field}._id`,
+    `values.${field}Id`,
+    `values.${field} Id`,
+
+    `${field}`,
+    `${field}._id`,
+    `${field}Id`,
+    `${field} Id`,
+  ];
+
+  // 🔥 Common aliases (works for Business/Calendar/Category/Service but STILL generic)
+  const f = String(field || "").toLowerCase();
+  if (f === "business") paths.push("businessId", "values.businessId");
+  if (f === "calendar") paths.push("calendarId", "values.calendarId");
+  if (f === "category") paths.push("categoryId", "values.categoryId");
+  if (f === "service")  paths.push("serviceId", "values.serviceId");
+
   const orParts = [];
 
-  // values.Field can be scalar OR array
-  if (eqStr) orParts.push({ [`values.${field}`]: eqStr });
-  if (strIds.length) orParts.push({ [`values.${field}`]: inStr });
+  for (const p of paths) {
+    if (eqStr) orParts.push({ [p]: eqStr });
+    if (strIds.length) orParts.push({ [p]: inStr });
 
-  if (eqObj) orParts.push({ [`values.${field}`]: eqObj });
-  if (objIds.length) orParts.push({ [`values.${field}`]: inObj });
-
-  // values.Field._id can be scalar OR array
-  if (eqStr) orParts.push({ [`values.${field}._id`]: eqStr });
-  if (strIds.length) orParts.push({ [`values.${field}._id`]: inStr });
-
-  if (eqObj) orParts.push({ [`values.${field}._id`]: eqObj });
-  if (objIds.length) orParts.push({ [`values.${field}._id`]: inObj });
-
-  // Id aliases
-  if (eqStr) orParts.push({ [`values.${field}Id`]: eqStr });
-  if (strIds.length) orParts.push({ [`values.${field}Id`]: inStr });
-
-  if (eqObj) orParts.push({ [`values.${field}Id`]: eqObj });
-  if (objIds.length) orParts.push({ [`values.${field}Id`]: inObj });
-
-  if (eqStr) orParts.push({ [`values.${field} Id`]: eqStr });
-  if (strIds.length) orParts.push({ [`values.${field} Id`]: inStr });
-
-  if (eqObj) orParts.push({ [`values.${field} Id`]: eqObj });
-  if (objIds.length) orParts.push({ [`values.${field} Id`]: inObj });
+    if (eqObj) orParts.push({ [p]: eqObj });
+    if (objIds.length) orParts.push({ [p]: inObj });
+  }
 
   return { $or: orParts };
 }
@@ -1313,6 +1325,22 @@ app.get("/api/records", ensureAuthenticated, async (req, res) => {
 
     const dt = await DataType.findById(dataTypeId).lean();
     if (!dt?._id) return res.json({ items: [] });
+
+    console.log("[public/records] dt found:", {
+  id: String(dt._id),
+  name: dt.name,
+  canon: dt.nameCanonical,
+  isPublicReadable: dt.isPublicReadable,
+});
+
+console.log("[DB inside route] using db:", mongoose.connection.db?.databaseName);
+
+const count = await Record.countDocuments({
+  dataTypeId: dt._id,
+  deletedAt: null,
+});
+
+console.log("[public/records] countInThisDB:", count, "dtId:", String(dt._id));
 
     // match your existing GET /api/records/:typeName behavior
     const nameCanon = String(dt.nameCanonical || "").toLowerCase();
