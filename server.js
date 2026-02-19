@@ -981,11 +981,14 @@ app.get("/public/records", async (req, res) => {
 
     // find the datatype
     // ✅ find the datatype (loose match like /api/records/:typeName)
-    const dt = await getDataTypeByNameLoose(dataTypeName);
-    if (!dt?._id) {
-      console.log("[public/records] datatype not found (loose)", dataTypeName);
-      return res.json({ items: [] });
-    }
+const dt = await getDataTypeByNameLoose(dataTypeName);
+if (!dt?._id) return res.json({ items: [] });
+
+// ✅ dynamic public permission check
+if (!dt.isPublicReadable) {
+  console.log("[public/records] blocked by dt.isPublicReadable:", dataTypeName);
+  return res.json({ items: [] });
+}
 
 console.log("[public/records] dt found:", { id: String(dt._id), name: dt.name, canon: dt.nameCanonical });
 
