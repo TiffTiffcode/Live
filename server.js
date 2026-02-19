@@ -774,9 +774,7 @@ app.get("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
     const typeName = decodeURIComponent(req.params.typeName || "").trim();
     if (!me) return res.status(401).json({ message: "Not logged in" });
 
-    const dt = await DataType.findOne({
-      nameCanonical: typeName.toLowerCase(),
-    }).lean();
+
 
     if (!dt) return res.json({ items: [] });
 
@@ -905,7 +903,7 @@ app.get("/api/records/:typeName/:id", ensureAuthenticated, async (req, res) => {
     if (!me) return res.status(401).json({ message: "Not logged in" });
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "Invalid id" });
 
-    const dt = await DataType.findOne({ nameCanonical: typeName.toLowerCase() }).lean();
+ 
     if (!dt) return res.status(404).json({ message: "DataType not found" });
 
     const enforcedWhere = await enforcedWhereForUser({
@@ -979,11 +977,7 @@ app.get("/public/records", async (req, res) => {
     console.log("[public/records] merged where:", merged);
     console.log("[public/records] ownerUserId query:", req.query.ownerUserId || null);
 
-    // find the datatype
-    const dt = await DataType.findOne({
-      $or: [{ name: dataTypeName }, { nameCanonical: dataTypeName.toLowerCase() }],
-      deletedAt: null,
-    }).lean();
+
 
     if (!dt?._id) {
       console.log("[public/records] datatype not found");
@@ -1861,7 +1855,7 @@ const baseQuery = {
 // Debug: list normalized slugs for all Business records
 app.get('/debug/business-slugs', async (_req, res) => {
   try {
-    const dt = await DataType.findOne({ name: /Business/i, deletedAt: null }).lean();
+
     const rows = await Record.find({
       deletedAt: null,
       $or: [{ dataTypeId: dt?._id || null }, { dataType: 'Business' }, { typeName: 'Business' }],
