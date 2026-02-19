@@ -217,32 +217,6 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), asyn
 
 
 //Bookin Payment intent 
-app.post("/api/fee-intent", async (req, res) => {
-  try {
-    const { businessId, calendarId, dateISO, timeHHMM } = req.body || {};
-
-    // ✅ $2.33 -> 233 cents
-    const amount = 233;
-
-    const intent = await stripe.paymentIntents.create({
-      amount,
-      currency: "usd",
-      automatic_payment_methods: { enabled: true },
-      metadata: {
-        businessId: businessId || "",
-        calendarId: calendarId || "",
-        dateISO: dateISO || "",
-        timeHHMM: timeHHMM || "",
-        kind: "service_fee",
-      },
-    });
-
-    return res.json({ clientSecret: intent.client_secret });
-  } catch (e) {
-    console.error("fee-intent error:", e);
-    return res.status(500).json({ error: "Failed to create fee intent" });
-  }
-});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -800,9 +774,9 @@ app.get("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
     const typeName = decodeURIComponent(req.params.typeName || "").trim();
     if (!me) return res.status(401).json({ message: "Not logged in" });
 
-   // const dt = await DataType.findOne({
-     // nameCanonical: typeName.toLowerCase(),
-    //}).lean();
+    const dt = await DataType.findOne({
+      nameCanonical: typeName.toLowerCase(),
+    }).lean();
 
     if (!dt) return res.json({ items: [] });
 
@@ -931,7 +905,7 @@ app.get("/api/records/:typeName/:id", ensureAuthenticated, async (req, res) => {
     if (!me) return res.status(401).json({ message: "Not logged in" });
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "Invalid id" });
 
-    //const dt = await DataType.findOne({ nameCanonical: typeName.toLowerCase() }).lean();
+    const dt = await DataType.findOne({ nameCanonical: typeName.toLowerCase() }).lean();
     if (!dt) return res.status(404).json({ message: "DataType not found" });
 
     const enforcedWhere = await enforcedWhereForUser({
@@ -1006,10 +980,10 @@ app.get("/public/records", async (req, res) => {
     console.log("[public/records] ownerUserId query:", req.query.ownerUserId || null);
 
     // find the datatype
-    //const dt = await DataType.findOne({
-      //$or: [{ name: dataTypeName }, { nameCanonical: dataTypeName.toLowerCase() }],
-      //deletedAt: null,
-    //}).lean();
+    const dt = await DataType.findOne({
+      $or: [{ name: dataTypeName }, { nameCanonical: dataTypeName.toLowerCase() }],
+      deletedAt: null,
+    }).lean();
 
     if (!dt?._id) {
       console.log("[public/records] datatype not found");
@@ -1315,7 +1289,7 @@ app.get("/api/records", ensureAuthenticated, async (req, res) => {
     const dataTypeId = String(req.query.dataTypeId || "").trim();
     if (!mongoose.isValidObjectId(dataTypeId)) return res.json({ items: [] });
 
-   // const dt = await DataType.findById(dataTypeId).lean();
+    const dt = await DataType.findById(dataTypeId).lean();
     if (!dt?._id) return res.json({ items: [] });
 
     // match your existing GET /api/records/:typeName behavior
@@ -1383,7 +1357,7 @@ app.post("/api/records", ensureAuthenticated, async (req, res) => {
     const dataTypeId = String(req.body?.dataTypeId || "").trim();
     if (!mongoose.isValidObjectId(dataTypeId)) return res.status(400).json({ items: [] });
 
-    //const dt = await DataType.findById(dataTypeId).lean();
+    const dt = await DataType.findById(dataTypeId).lean();
     if (!dt?._id) return res.status(404).json({ items: [] });
 
     const rawValues = req.body?.values || {};
