@@ -1159,11 +1159,31 @@ function buildRefOrScalarMatch(field, value) {
   ];
 
   // 🔥 Common aliases (works for Business/Calendar/Category/Service but STILL generic)
-  const f = String(field || "").toLowerCase();
-  if (f === "business") paths.push("businessId", "values.businessId");
-  if (f === "calendar") paths.push("calendarId", "values.calendarId");
-  if (f === "category") paths.push("categoryId", "values.categoryId");
-  if (f === "service")  paths.push("serviceId", "values.serviceId");
+const f = String(field || "").toLowerCase();
+
+// handle "Category" param matching both shapes:
+if (f === "category") paths.push(
+  "categoryId",
+  "values.categoryId",
+  "values.Category",
+  "values.Category._id"
+);
+
+// handle "Business":
+if (f === "business") paths.push(
+  "businessId",
+  "values.businessId",
+  "values.Business",
+  "values.Business._id"
+);
+
+// handle "Calendar":
+if (f === "calendar") paths.push(
+  "calendarId",
+  "values.calendarId",
+  "values.Calendar",
+  "values.Calendar._id"
+);
 
   const orParts = [];
 
