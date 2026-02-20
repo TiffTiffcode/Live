@@ -130,7 +130,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   proxy: true,
-  store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }), // ✅ add this
+  store: MongoStore.create({ mongoUrl: MONGO_URL }), // ✅ use same URL
   cookie: {
     httpOnly: true,
     secure: IS_PROD,
@@ -138,6 +138,7 @@ app.use(session({
     domain: IS_PROD ? ".suiteseat.io" : undefined,
   },
 }));
+
 
 
 if (!webhookSecret) {
@@ -2533,15 +2534,24 @@ app.post("/signup/pro", async (req, res) => {
 
 
 app.post('/api/login', async (req, res) => {
+  console.log("[login] db:", mongoose.connection.db?.databaseName);
+
   const { email, password } = req.body || {};
-  const user = await AuthUser.findOne({ email: String(email).toLowerCase().trim() });
+  const e = String(email).toLowerCase().trim();
+
+  const user = await AuthUser.findOne({ email: e });
+  console.log("[login] email:", e, "foundUser:", !!user);
+
   if (!user) return res.status(401).json({ message: 'Invalid credentials' });
 
   const ok = await bcrypt.compare(String(password || ''), user.passwordHash);
+  console.log("[login] passwordMatch:", ok);
+
   if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
 
   req.session.regenerate(async (err) => {
     if (err) return res.status(500).json({ message: 'Session error' });
+
     req.session.userId = String(user._id);
     req.session.roles  = Array.isArray(user.roles) ? user.roles : [];
     req.session.user   = {
@@ -2550,6 +2560,7 @@ app.post('/api/login', async (req, res) => {
       firstName: user.firstName || '',
       lastName:  user.lastName  || ''
     };
+
     await req.session.save();
     res.json({ ok: true, user: req.session.user });
   });
