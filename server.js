@@ -130,7 +130,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   proxy: true,
-  store: MongoStore.create({ mongoUrl: MONGO_URL }), // ✅ use same URL
+  store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }), // ✅ add this
   cookie: {
     httpOnly: true,
     secure: IS_PROD,
@@ -138,7 +138,6 @@ app.use(session({
     domain: IS_PROD ? ".suiteseat.io" : undefined,
   },
 }));
-
 
 
 if (!webhookSecret) {
@@ -2532,39 +2531,79 @@ app.post("/signup/pro", async (req, res) => {
   }
 });
 
+// ✅ Debug + compatibility aliases for booking page login (ADD ONLY)
+app.post("/auth/login", (req, res, next) => {
+  // if anything calls /auth/login, reuse /api/login
+  req.url = "/api/login";
+  next();
+});
+
+app.get("/auth/login", (_req, res) => {
+  // prevents "Cannot GET /auth/login" confusion
+  res.status(405).json({ ok: false, message: "Use POST /api/login" });
+});
+
+// ✅ DEBUG route so you can see what the server receives
+app.post("/api/login-debug", (req, res) => {
+  res.json({
+    ok: true,
+    got: req.body,
+    cookie: req.headers.cookie || null,
+    origin: req.headers.origin || null,
+  });
+});
+
+// ✅ Alias so both /check-login and /api/check-login work
+app.get("/api/check-login", (req, res) => {
+  req.url = "/check-login";
+  app.handle(req, res);
+});
 
 app.post('/api/login', async (req, res) => {
-  console.log("[login] db:", mongoose.connection.db?.databaseName);
+  console.log("[login] incoming", {
+    email: req.body?.email,
+    hasPassword: !!req.body?.password,
+    origin: req.headers.origin,
+    cookieIn: req.headers.cookie || null,
+  });
 
   const { email, password } = req.body || {};
   const e = String(email).toLowerCase().trim();
 
   const user = await AuthUser.findOne({ email: e });
-  console.log("[login] email:", e, "foundUser:", !!user);
+  console.log("[login] foundUser:", !!user, "emailNorm:", e);
 
-  if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+  if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
-  const ok = await bcrypt.compare(String(password || ''), user.passwordHash);
+  const ok = await bcrypt.compare(String(password || ""), user.passwordHash);
   console.log("[login] passwordMatch:", ok);
 
-  if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
+  if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
   req.session.regenerate(async (err) => {
-    if (err) return res.status(500).json({ message: 'Session error' });
+    if (err) return res.status(500).json({ message: "Session error" });
 
     req.session.userId = String(user._id);
     req.session.roles  = Array.isArray(user.roles) ? user.roles : [];
     req.session.user   = {
       _id: String(user._id),
       email: user.email,
-      firstName: user.firstName || '',
-      lastName:  user.lastName  || ''
+      firstName: user.firstName || "",
+      lastName: user.lastName || "",
     };
 
     await req.session.save();
+
+    console.log("[login] session set", {
+      sessionID: req.sessionID,
+      userId: req.session.userId,
+      roles: req.session.roles,
+    });
+
     res.json({ ok: true, user: req.session.user });
   });
 });
+
 
 
 // --- DEV ONLY: turn on admin/pro in the session ---
