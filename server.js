@@ -849,6 +849,7 @@ const nameCanon = String(dt.nameCanonical || "").toLowerCase();
 // “top-level” types should act like: creator owns it
 const TOP_LEVEL = new Set([
   "business", "calendar", "category", "service",
+  "client", // ✅ ADD THIS
   "course", "coursesection", "courselesson", "coursechapter"
 ]);
 
@@ -1335,83 +1336,77 @@ app.get("/api/cloudinary/sign", (req, res) => {
 // =====================================================
 
 // LIST by dataTypeId: /api/records?dataTypeId=...&limit=500&sort=-createdAt
+// LIST by dataTypeId: /api/records?dataTypeId=...&limit=500&sort=-createdAt
 app.get("/api/records", ensureAuthenticated, async (req, res) => {
   try {
-    const me = String(req.session.userId || "");
+    const me = String(req.session?.userId || "");
     if (!me) return res.status(401).json({ items: [] });
 
-    const dataTypeId = String(req.query.dataTypeId || "").trim();
+    const dataTypeId = String(req.query?.dataTypeId || "").trim();
     if (!mongoose.isValidObjectId(dataTypeId)) return res.json({ items: [] });
 
     const dt = await DataType.findById(dataTypeId).lean();
     if (!dt?._id) return res.json({ items: [] });
 
-    console.log("[public/records] dt found:", {
-  id: String(dt._id),
-  name: dt.name,
-  canon: dt.nameCanonical,
-  isPublicReadable: dt.isPublicReadable,
-});
+    // logs (optional)
+    console.log("[api/records] dt found:", {
+      id: String(dt._id),
+      name: dt.name,
+      canon: dt.nameCanonical,
+      isPublicReadable: dt.isPublicReadable,
+    });
+    console.log("[api/records] db:", mongoose.connection.db?.databaseName);
 
-console.log("[DB inside route] using db:", mongoose.connection.db?.databaseName);
-
-const count = await Record.countDocuments({
-  dataTypeId: dt._id,
-  deletedAt: null,
-});
-
-console.log("[public/records] countInThisDB:", count, "dtId:", String(dt._id));
+    const count = await Record.countDocuments({ dataTypeId: dt._id, deletedAt: null });
+    console.log("[api/records] countInThisDB:", count, "dtId:", String(dt._id));
 
     // match your existing GET /api/records/:typeName behavior
     const nameCanon = String(dt.nameCanonical || "").toLowerCase();
+
+    // ✅ include client here too (fixes Client list issues)
     const TOP_LEVEL = new Set([
       "business", "calendar", "category", "service",
+      "client", // ✅ ADD
       "course", "coursesection", "courselesson", "coursechapter",
-      "storetheme", "store_theme", "store theme"
+      "storetheme", "store_theme", "store theme",
     ]);
 
-const enforcedWhere = TOP_LEVEL.has(nameCanon)
-  ? {
-      $or: [
-        { createdBy: me },
-        { "values.ownerUserId": me },
-        { "values.ownerUserId._id": me },
-        { owners: me },
-        { members: me },
-      ],
-    }
-  : await enforcedWhereForUser({ dataTypeId: String(dt._id), userId: me });
+    const enforcedWhere = TOP_LEVEL.has(nameCanon)
+      ? {
+          $or: [
+            { createdBy: me },
+            { "values.ownerUserId": me },
+            { "values.ownerUserId._id": me },
+            { owners: me },
+            { members: me },
+          ],
+        }
+      : await enforcedWhereForUser({ dataTypeId: String(dt._id), userId: me });
 
     const limit = Math.min(Number(req.query.limit || 200), 2000);
     const sort = String(req.query.sort || "-createdAt");
-    const sortObj = sort.startsWith("-")
-      ? { [sort.slice(1)]: -1 }
-      : { [sort]: 1 };
-// ✅ HARD ENFORCE: if ownerUserId is provided, ALWAYS filter by values.ownerUserId
-const ownerParam = String(req.query.ownerUserId || "").trim();
-if (ownerParam) {
-  const ownerFilter = { "values.ownerUserId": ownerParam };
+    const sortObj = sort.startsWith("-") ? { [sort.slice(1)]: -1 } : { [sort]: 1 };
 
-  // merge into mongoWhere safely
-  if (mongoWhere && Object.keys(mongoWhere).length) {
-    mongoWhere = { $and: [mongoWhere, ownerFilter] };
-  } else {
-    mongoWhere = ownerFilter;
-  }
+    // ✅ ownerUserId filter (FIXED — no mongoWhere undefined)
+    const ownerParam = String(req.query.ownerUserId || "").trim();
 
-  console.log("[public/records] enforced owner filter:", ownerFilter);
-}
-
-    const rows = await Record.find({
+    const findQuery = {
       dataTypeId: dt._id,
       deletedAt: null,
       ...enforcedWhere,
-    })
+    };
+
+    if (ownerParam) {
+      findQuery["values.ownerUserId"] = ownerParam;
+      console.log("[api/records] enforced ownerUserId:", ownerParam);
+    }
+
+    const rows = await Record.find(findQuery)
       .sort(sortObj)
       .limit(limit)
       .lean();
 
-    return res.json({ items: rows });
+    return res.json({ items: rows }); // ✅ keep your consistent shape
   } catch (e) {
     console.error("GET /api/records (alias) failed:", e);
     return res.status(500).json({ items: [] });
