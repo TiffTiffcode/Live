@@ -1114,6 +1114,91 @@ console.log("[public/records] dt found:", { id: String(dt._id), name: dt.name, c
 });
 
 
+// ------------------------------------------------------------
+// UNIVERSAL VISIBILITY: user can see records that are:
+// - created by them
+// - owned by them
+// - reference them via ANY "user-ish" field name (Pro, Client, Assigned To, etc.)
+// ------------------------------------------------------------
+async function enforcedWhereForUser({ dataTypeId, userId }) {
+  const me = String(userId || "").trim();
+
+  // Base: always allow own-created / own-owned
+  const base = {
+    $or: [
+      { createdBy: me },
+      { "values.ownerUserId": me },
+      { "values.ownerUserId._id": me },
+    ],
+  };
+
+  // If we don't have datatype, fall back to base
+  if (!dataTypeId || !mongoose.isValidObjectId(dataTypeId)) return base;
+
+  const dt = await DataType.findById(dataTypeId).lean();
+  if (!dt) return base;
+
+  // dt.fields can vary in structure; we’ll be defensive
+  const fields = Array.isArray(dt.fields) ? dt.fields : [];
+
+  // Find fields that "look like" they reference the user
+  // (based on name heuristics you already defined)
+  const candidateFieldNames = fields
+    .map((f) => String(f?.name || f?.label || f?.key || "").trim())
+    .filter(Boolean)
+    .filter((nm) => USER_ID_FIELD_NAMES.has(nm.toLowerCase()));
+
+  // Also include common system-ish fields even if not in dt.fields
+ const fallbackNames = [
+  "Pro",
+  "Client",
+  "User",
+  "Owner",
+  "Assigned To",
+  "proUserId",
+  "clientId"
+];
+
+fallbackNames.forEach((n) => {
+  if (!candidateFieldNames.some(x => x.toLowerCase() === n.toLowerCase())) {
+    candidateFieldNames.push(n);
+  }
+});
+
+
+  // Build OR clauses for “record references me”
+  const refOrs = [];
+  for (const fieldName of candidateFieldNames) {
+    for (const path of refCandidatePaths(fieldName)) {
+      // match string id
+      refOrs.push({ [path]: me });
+
+      // match ObjectId form
+      if (mongoose.isValidObjectId(me)) {
+        refOrs.push({ [path]: new mongoose.Types.ObjectId(me) });
+      }
+    }
+  }
+
+  // If no candidates found, just return base
+  if (!refOrs.length) return base;
+
+  // Final: base OR any reference match
+  return {
+    $or: [
+      ...base.$or,
+      ...refOrs,
+    ],
+  };
+}
+
+
+
+
+
+
+
+
 
 function oid(x) {
   if (!x) return null;
