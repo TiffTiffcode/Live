@@ -3862,18 +3862,235 @@ app.post("/api/public/checkout/:checkoutId/create-payment-intent", async (req, r
     return res.status(500).json({ error: "pi_create_failed" });
   }
 });
- ///Temp 
-app.get("/api/debug/last-checkout-item", async (req, res) => {
-  const dt = await DataType.findOne({ name: /Checkout Item/i, deletedAt: null }).lean();
-  if (!dt) return res.status(404).json({ error: "no_checkout_item_datatype" });
+app.post("/api/checkout/:id/create-payment-intent", requireLogin, async (req, res) => {
+  try {
+    const customerId = String(req.session.userId);
+    const checkoutId = String(req.params.id || "");
+    if (!checkoutId) return res.status(400).json({ error: "missing_checkoutId" });
 
-  const row = await Record.findOne({ dataTypeId: dt._id, deletedAt: null })
-    .sort({ _id: -1 })
-    .lean();
+    const checkoutDT = await DataType.findOne({ nameCanonical: "checkout" }).lean();
+    if (!checkoutDT) return res.status(400).json({ error: "missing_checkout_datatype" });
 
-  return res.json({ item: row });
+    const checkout = await Record.findOne({
+      _id: checkoutId,
+      dataTypeId: checkoutDT._id,
+      deletedAt: null,
+      "values.Customer": customerId,
+      "values.status": { $in: ["open", "draft"] },
+    }).lean();
+
+    if (!checkout) return res.status(404).json({ error: "checkout_not_found" });
+
+    const v = checkout.values || {};
+    const totalCents = Number(v["Total Amount"] || 0);
+    const feeCents   = Number(v["Platform Fee"] || 0);
+    const currency   = (v["Currency"] || "usd").toLowerCase();
+    const destination = String(v["Payee Stripe Account ID"] || "");
+
+    if (!totalCents || totalCents < 50) return res.status(400).json({ error: "invalid_total" });
+    if (!destination) return res.status(400).json({ error: "missing_payee_stripe" });
+
+    const intent = await stripe.paymentIntents.create({
+      amount: totalCents,
+      currency,
+      automatic_payment_methods: { enabled: true },
+
+      // ✅ send money to payee, keep platform fee
+      application_fee_amount: feeCents,
+      transfer_data: { destination },
+
+      metadata: {
+        kind: "checkout",
+        checkoutId,
+        customerId,
+      },
+    });
+
+    return res.json({
+      clientSecret: intent.client_secret,
+      paymentIntentId: intent.id,
+    });
+  } catch (e) {
+    console.error("[checkout/create-payment-intent] error", e);
+    return res.status(500).json({ error: "internal" });
+  }
 });
-////////////////
+
+function toCents(n) {
+  const x = Number(n || 0);
+  return Math.round(x * 100);
+}
+
+function xId(val) {
+  if (!val) return null;
+  if (typeof val === "string") return val;
+  if (val._id) return String(val._id);
+  if (val.id) return String(val.id);
+  return null;
+}
+
+app.get("/api/checkout/current", requireLogin, async (req, res) => {
+  try {
+    const customerId = String(req.session.userId);
+
+    const checkoutDT = await DataType.findOne({ nameCanonical: "checkout" }).lean();
+    const itemDT     = await DataType.findOne({ nameCanonical: "checkout item" }).lean();
+    if (!checkoutDT || !itemDT) return res.status(400).json({ error: "missing_datatypes" });
+
+    // find an open checkout for this customer
+    let checkout = await Record.findOne({
+      dataTypeId: checkoutDT._id,
+      deletedAt: null,
+      "values.Customer": customerId,
+      "values.status": { $in: ["open", "draft", "", null] },
+    }).sort({ _id: -1 }).lean();
+
+    // if none, create one
+    if (!checkout) {
+      checkout = await Record.create({
+        dataTypeId: checkoutDT._id,
+        dataType: "Checkout",
+        createdBy: customerId,
+        values: {
+          Customer: customerId,
+          status: "open",
+          Currency: "usd",
+          Subtotal: 0,
+          "Total Amount": 0,
+          "Platform Fee": 0,
+        }
+      });
+      checkout = checkout.toObject();
+    }
+
+    const items = await Record.find({
+      dataTypeId: itemDT._id,
+      deletedAt: null,
+      "values.Checkout": String(checkout._id),
+    }).sort({ _id: -1 }).lean();
+
+    return res.json({ items: [{ checkout, items }] });
+  } catch (e) {
+    console.error("[checkout/current] error", e);
+    return res.status(500).json({ error: "internal" });
+  }
+});
+
+app.post("/api/checkout/items/add-course", requireLogin, async (req, res) => {
+  try {
+    const customerId = String(req.session.userId);
+    const { courseId, quantity = 1 } = req.body || {};
+    if (!courseId) return res.status(400).json({ error: "missing_courseId" });
+
+    const checkoutDT = await DataType.findOne({ nameCanonical: "checkout" }).lean();
+    const itemDT     = await DataType.findOne({ nameCanonical: "checkout item" }).lean();
+    const courseDT   = await DataType.findOne({ nameCanonical: "course" }).lean();
+    if (!checkoutDT || !itemDT || !courseDT) return res.status(400).json({ error: "missing_datatypes" });
+
+    // Load the course record (to get title + price + createdBy/payee)
+    const course = await Record.findOne({
+      _id: courseId,
+      dataTypeId: courseDT._id,
+      deletedAt: null
+    }).lean();
+
+    if (!course) return res.status(404).json({ error: "course_not_found" });
+
+    const cv = course.values || {};
+    const title = cv["Course Title"] || cv["Title"] || "Course";
+    const unitAmount = Number(cv["Price"] ?? 0); // dollars in your data
+    const unitAmountCents = toCents(unitAmount);
+
+    // Who gets paid for this course?
+    const payeeUserId = String(course.createdBy || cv["Created By"] || "");
+    if (!payeeUserId) return res.status(400).json({ error: "course_missing_payee" });
+
+    const payee = await AuthUser.findById(payeeUserId).lean();
+    const payeeStripeAccountId = String(payee?.stripeAccountId || "");
+    if (!payeeStripeAccountId) {
+      return res.status(400).json({ error: "payee_not_connected" });
+    }
+
+    // Find an OPEN checkout for this customer AND this payee (Rule A)
+    let checkout = await Record.findOne({
+      dataTypeId: checkoutDT._id,
+      deletedAt: null,
+      "values.Customer": customerId,
+      "values.status": { $in: ["open", "draft", "", null] },
+      "values.Payee": payeeUserId,
+    }).sort({ _id: -1 }).lean();
+
+    if (!checkout) {
+      checkout = await Record.create({
+        dataTypeId: checkoutDT._id,
+        dataType: "Checkout",
+        createdBy: customerId,
+        values: {
+          Customer: customerId,
+          Payee: payeeUserId,
+          "Payee Stripe Account ID": payeeStripeAccountId,
+          status: "open",
+          Currency: "usd",
+          Subtotal: 0,
+          "Total Amount": 0,
+          "Platform Fee": 0,
+        }
+      });
+      checkout = checkout.toObject();
+    }
+
+    const qty = Math.max(1, Number(quantity || 1));
+    const totalAmountCents = unitAmountCents * qty;
+
+    const item = await Record.create({
+      dataTypeId: itemDT._id,
+      dataType: "Checkout Item",
+      createdBy: customerId,
+      values: {
+        "Course(s)": [courseId],         // you allowed multiple
+        "Kind": "course",
+        "Label": title,
+        "Quantity": qty,
+        "Unit Amount": unitAmountCents,  // ✅ store cents in DB
+        "Total Amount": totalAmountCents,
+        "Currency": "usd",
+        "Reference Id": String(courseId),
+        "Reference Type": "Course",
+        "Checkout": String(checkout._id),
+      }
+    });
+
+    // Recalc checkout totals from all its items
+    const allItems = await Record.find({
+      dataTypeId: itemDT._id,
+      deletedAt: null,
+      "values.Checkout": String(checkout._id),
+    }, { values: 1 }).lean();
+
+    const subtotalCents = allItems.reduce((sum, r) => sum + Number(r.values?.["Total Amount"] || 0), 0);
+
+    // platform fee example: 5% (change later)
+    const platformFeeCents = Math.round(subtotalCents * 0.05);
+    const totalCents = subtotalCents + platformFeeCents;
+
+    await Record.updateOne(
+      { _id: checkout._id },
+      {
+        $set: {
+          "values.Subtotal": subtotalCents,
+          "values.Platform Fee": platformFeeCents,
+          "values.Total Amount": totalCents,
+        }
+      }
+    );
+
+    return res.json({ item });
+  } catch (e) {
+    console.error("[checkout/items/add-course] error", e);
+    return res.status(500).json({ error: "internal" });
+  }
+});
+
 app.post("/api/connect/onboard", ensureAuthenticated, async (req, res) => {
   try {
     const { accountId } = req.body || {};
