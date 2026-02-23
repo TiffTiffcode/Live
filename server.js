@@ -238,6 +238,8 @@ const s3 = (process.env.AWS_REGION && process.env.AWS_ACCESS_KEY_ID && process.e
 
 
 
+
+  
 // ---------- middleware BEFORE routes ----------
 
 //Images
@@ -3759,7 +3761,119 @@ app.post("/api/rent/create-payment-intent", ensureAuthenticated, async (req, res
     return res.status(500).json({ error: "rent_pi_failed" });
   }
 });
-                 
+  
+
+//Checkout items 
+app.get("/api/public/checkout/:checkoutId", async (req, res) => {
+  try {
+    const checkoutId = String(req.params.checkoutId || "");
+    if (!checkoutId) return res.status(400).json({ error: "missing_checkoutId" });
+
+    const checkoutDT = await DataType.findOne({ name: /Checkout/i, deletedAt: null }).lean();
+    const itemDT     = await DataType.findOne({ name: /Checkout Item/i, deletedAt: null }).lean();
+    if (!checkoutDT || !itemDT) return res.status(400).json({ error: "missing_datatypes" });
+
+    const checkout = await Record.findOne({
+      _id: checkoutId,
+      dataTypeId: checkoutDT._id,
+      deletedAt: null,
+    }).lean();
+
+    if (!checkout) return res.status(404).json({ error: "checkout_not_found" });
+
+    const rows = await Record.find({
+      dataTypeId: itemDT._id,
+      deletedAt: null,
+      "values.Checkout": checkoutId,
+    }).lean();
+
+    // 👇 user preference for list endpoints
+    return res.json({ items: rows, checkout });
+  } catch (e) {
+    console.error("[public checkout get] error", e);
+    return res.status(500).json({ error: "checkout_load_failed" });
+  }
+});
+ 
+app.post("/api/public/checkout/:checkoutId/create-payment-intent", async (req, res) => {
+  try {
+    const checkoutId = String(req.params.checkoutId || "");
+    if (!checkoutId) return res.status(400).json({ error: "missing_checkoutId" });
+
+    const checkoutDT = await DataType.findOne({ name: /Checkout/i, deletedAt: null }).lean();
+    const itemDT     = await DataType.findOne({ name: /Checkout Item/i, deletedAt: null }).lean();
+    if (!checkoutDT || !itemDT) return res.status(400).json({ error: "missing_datatypes" });
+
+    const checkout = await Record.findOne({
+      _id: checkoutId,
+      dataTypeId: checkoutDT._id,
+      deletedAt: null,
+    }).lean();
+    if (!checkout) return res.status(404).json({ error: "checkout_not_found" });
+
+    const items = await Record.find({
+      dataTypeId: itemDT._id,
+      deletedAt: null,
+      "values.Checkout": checkoutId,
+    }).lean();
+
+    if (!items.length) return res.status(400).json({ error: "checkout_empty" });
+
+    // total in cents
+    const totalCents = items.reduce((sum, r) => {
+      const v = r.values || {};
+      return sum + Number(v["Total Amount"] || 0);
+    }, 0);
+
+    if (!Number.isInteger(totalCents) || totalCents < 50) {
+      return res.status(400).json({ error: "invalid_total" });
+    }
+
+    // Put a readable label in Stripe (shows in Stripe dashboard)
+    const firstLabel = String(items[0].values?.Label || "Checkout");
+    const description =
+      items.length === 1 ? firstLabel : `${firstLabel} + ${items.length - 1} more`;
+
+    const pi = await stripe.paymentIntents.create({
+      amount: totalCents,
+      currency: "usd",
+      automatic_payment_methods: { enabled: true },
+      description,
+      metadata: {
+        kind: "checkout",
+        checkoutId,
+        itemsCount: String(items.length),
+      },
+    });
+
+    // (optional) store on checkout record
+    await Record.updateOne(
+      { _id: checkoutId },
+      { $set: { "values.Stripe Payment Intent Id": pi.id } }
+    );
+
+    return res.json({
+      clientSecret: pi.client_secret,
+      paymentIntentId: pi.id,
+      amount: totalCents,
+    });
+  } catch (e) {
+    console.error("[checkout create PI] error", e);
+    return res.status(500).json({ error: "pi_create_failed" });
+  }
+});
+ ///Temp 
+app.get("/api/debug/last-checkout-item", async (req, res) => {
+  const dt = await DataType.findOne({ name: /Checkout Item/i, deletedAt: null }).lean();
+  if (!dt) return res.status(404).json({ error: "no_checkout_item_datatype" });
+
+  const row = await Record.findOne({ dataTypeId: dt._id, deletedAt: null })
+    .sort({ _id: -1 })
+    .lean();
+
+  return res.json({ item: row });
+});
+////////////////
 app.post("/api/connect/onboard", ensureAuthenticated, async (req, res) => {
   try {
     const { accountId } = req.body || {};
