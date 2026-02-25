@@ -3944,10 +3944,21 @@ app.post("/api/checkout/:id/create-payment-intent", requireLogin, async (req, re
       clientSecret: intent.client_secret,
       paymentIntentId: intent.id,
     });
-  } catch (e) {
-    console.error("[checkout/create-payment-intent] error", e);
-    return res.status(500).json({ error: "internal" });
-  }
+} catch (e) {
+  const raw = e?.raw || e;
+  console.error("[checkout/create-payment-intent] error:", raw);
+
+  return res.status(raw?.statusCode || 500).json({
+    error: "stripe_error",
+    message: raw?.message || e?.message || "unknown_error",
+    type: raw?.type || "",
+    code: raw?.code || "",
+    param: raw?.param || "",
+    requestId: raw?.requestId || "",
+    decline_code: raw?.decline_code || "",
+  });
+}
+
 });
 
 function toCents(n) {
