@@ -2605,6 +2605,40 @@ app.post("/signup/pro", async (req, res) => {
   }
 });
 
+// POST /api/guest-signup
+app.post("/api/guest-signup", async (req, res) => {
+  try {
+    const { email, password, firstName = "", lastName = "" } = req.body || {};
+    if (!email || !password) return res.status(400).json({ message: "Email & password required" });
+
+    const existing = await AuthUser.findOne({ email: String(email).toLowerCase().trim() });
+    if (existing) return res.status(409).json({ message: "Email already in use. Please log in." });
+
+    const passwordHash = await bcrypt.hash(String(password), 10);
+    const user = await AuthUser.create({
+      email: String(email).toLowerCase().trim(),
+      passwordHash,
+      firstName,
+      lastName,
+      roles: ["client"],
+    });
+
+    req.session.userId = String(user._id);
+    req.session.user = {
+      _id: String(user._id),
+      email: user.email,
+      firstName: user.firstName || "",
+      lastName: user.lastName || "",
+    };
+    await req.session.save();
+
+    return res.json({ ok: true, user: req.session.user });
+  } catch (e) {
+    console.error("[guest-signup] error", e);
+    return res.status(500).json({ message: "Guest signup failed" });
+  }
+});
+
 // ✅ Debug + compatibility aliases for booking page login (ADD ONLY)
 app.post("/auth/login", (req, res, next) => {
   // if anything calls /auth/login, reuse /api/login
