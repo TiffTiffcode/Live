@@ -4149,6 +4149,61 @@ app.post("/api/connect/onboard", ensureAuthenticated, async (req, res) => {
 });
 
 
+app.delete("/api/checkout/items/:id", requireLogin, async (req, res) => {
+  try {
+    const customerId = String(req.session.userId || "");
+    const itemId = String(req.params.id || "");
+    if (!itemId) return res.status(400).json({ error: "missing_itemId" });
+
+    const checkoutDT = await DataType.findOne({ nameCanonical: "checkout" }).lean();
+    const itemDT     = await DataType.findOne({ nameCanonical: "checkout item" }).lean();
+    if (!checkoutDT || !itemDT) return res.status(400).json({ error: "missing_datatypes" });
+
+    // Find item owned by this customer
+    const item = await Record.findOne({
+      _id: itemId,
+      dataTypeId: itemDT._id,
+      deletedAt: null,
+      createdBy: customerId,
+    }).lean();
+
+    if (!item) return res.status(404).json({ error: "item_not_found" });
+
+    const checkoutId = String(item.values?.Checkout || "");
+    if (!checkoutId) return res.status(400).json({ error: "item_missing_checkout" });
+
+    // Soft delete
+    await Record.updateOne({ _id: itemId }, { $set: { deletedAt: new Date() } });
+
+    // Recalc totals from remaining items
+    const remaining = await Record.find({
+      dataTypeId: itemDT._id,
+      deletedAt: null,
+      "values.Checkout": checkoutId,
+      createdBy: customerId,
+    }).lean();
+
+    const subtotalCents = remaining.reduce((sum, r) => sum + Number(r.values?.["Total Amount"] || 0), 0);
+    const platformFeeCents = Math.round(subtotalCents * 0.05);
+    const totalCents = subtotalCents + platformFeeCents;
+
+    await Record.updateOne(
+      { _id: checkoutId, dataTypeId: checkoutDT._id, deletedAt: null },
+      {
+        $set: {
+          "values.Subtotal": subtotalCents,
+          "values.Platform Fee": platformFeeCents,
+          "values.Total Amount": totalCents,
+        }
+      }
+    );
+
+    return res.json({ items: remaining });
+  } catch (e) {
+    console.error("[checkout item delete] error", e);
+    return res.status(500).json({ error: "internal" });
+  }
+});
 
 
 app.get("/api/connect/status", ensureAuthenticated, async (req, res) => {
