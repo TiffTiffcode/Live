@@ -558,29 +558,6 @@ function uploadBufferToCloudinary(buffer, { folder = "suiteseat", public_id } = 
 
 
 
-
-
-
-
-
-// Clears any stored Stripe Connect account on the logged-in user
-app.post("/api/connect/reset", ensureAuthenticated, async (req, res) => {
-  try {
-    const me = String(req.session?.userId || "");
-    const user = await AuthUser.findById(me);
-    if (!user) return res.status(404).json({ ok: false, error: "user_not_found" });
-
-    user.stripeAccountId = undefined;
-    user.stripeConnectAccountId = undefined; // if you ever used this name
-    await user.save();
-
-    return res.json({ ok: true, cleared: true });
-  } catch (e) {
-    console.error("[connect/reset] failed", e);
-    return res.status(500).json({ ok: false, error: "connect_reset_failed" });
-  }
-});
-
 //////////////////////////////////////////////////////////////////////
 // Records Stuff — visibility / permissions (ONE version only)
 
@@ -4157,27 +4134,41 @@ app.post("/api/checkout/items/add-course", requireLogin, async (req, res) => {
 
 app.post("/api/connect/onboard", ensureAuthenticated, async (req, res) => {
   try {
-    const { accountId } = req.body || {};
-    if (!accountId) return res.status(400).json({ error: "missing_accountId" });
+    const me = String(req.session.userId || "");
+    if (!me) return res.status(401).json({ ok:false, error: "Unauthorized" });
 
-    const baseUrl = isProd
-      ? (process.env.PUBLIC_BASE_URL_LIVE || "https://app.suiteseat.io")
-      : (process.env.PUBLIC_BASE_URL || "http://localhost:3000");
+    const user = await AuthUser.findById(me).lean();
+    if (!user) return res.status(404).json({ ok:false, error: "user_not_found" });
+
+    const accountId = user.stripeAccountId || req.body?.accountId;
+    if (!accountId) return res.status(400).json({ ok:false, error: "missing_accountId" });
+
+    // ✅ IMPORTANT: make sure account matches your key mode
+    // (If you're using LIVE key, the account MUST be a live account)
+    const account = await stripe.accounts.retrieve(accountId);
 
     const link = await stripe.accountLinks.create({
       account: accountId,
-      refresh_url: `${baseUrl}/suite-settings.html?stripe=refresh`,
-      return_url: `${baseUrl}/suite-settings.html?stripe=return`,
       type: "account_onboarding",
+      refresh_url: "https://www.suiteseat.io/suite-settings.html?stripe=refresh",
+      return_url: "https://www.suiteseat.io/suite-settings.html?stripe=return",
     });
 
-    return res.json({ url: link.url });
+    return res.json({ ok:true, url: link.url, accountId });
   } catch (e) {
-    console.error("connect/onboard failed", e?.raw || e);
-    return res.status(500).json({ error: "connect_onboard_failed" });
+    // ✅ DO NOT swallow details
+    console.error("[connect/onboard] failed:", e);
+
+    return res.status(500).json({
+      ok: false,
+      error: "connect_onboard_failed",
+      message: e?.raw?.message || e?.message || "unknown_error",
+      type: e?.raw?.type || e?.type || "",
+      code: e?.raw?.code || e?.code || "",
+      statusCode: e?.statusCode || "",
+    });
   }
 });
-
 
 app.delete("/api/checkout/items/:id", requireLogin, async (req, res) => {
   try {
