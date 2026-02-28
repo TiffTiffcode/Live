@@ -563,7 +563,23 @@ function uploadBufferToCloudinary(buffer, { folder = "suiteseat", public_id } = 
 
 
 
+// Clears any stored Stripe Connect account on the logged-in user
+app.post("/api/connect/reset", ensureAuthenticated, async (req, res) => {
+  try {
+    const me = String(req.session?.userId || "");
+    const user = await AuthUser.findById(me);
+    if (!user) return res.status(404).json({ ok: false, error: "user_not_found" });
 
+    user.stripeAccountId = undefined;
+    user.stripeConnectAccountId = undefined; // if you ever used this name
+    await user.save();
+
+    return res.json({ ok: true, cleared: true });
+  } catch (e) {
+    console.error("[connect/reset] failed", e);
+    return res.status(500).json({ ok: false, error: "connect_reset_failed" });
+  }
+});
 
 //////////////////////////////////////////////////////////////////////
 // Records Stuff — visibility / permissions (ONE version only)
