@@ -4222,14 +4222,22 @@ app.delete("/api/checkout/items/:id", requireLogin, async (req, res) => {
 
 app.get("/api/connect/status", ensureAuthenticated, async (req, res) => {
   try {
-    const me = String(req.session.userId || "");
-    if (!me) return res.status(401).json({ error: "Unauthorized" });
+    const me = String(req.session?.userId || "");
+    if (!me) return res.status(401).json({ ok: false, error: "Unauthorized" });
 
     const user = await AuthUser.findById(me).lean();
-    if (!user) return res.status(404).json({ error: "user_not_found" });
+    if (!user) return res.status(404).json({ ok: false, error: "user_not_found" });
 
-    if (!user.stripeAccountId) {
+    const acctId =
+      user.stripeAccountId ||
+      user.stripeConnectAccountId ||
+      user.values?.stripeAccountId ||
+      "";
+
+    // ✅ not connected is NOT an error
+    if (!acctId) {
       return res.json({
+        ok: true,
         connected: false,
         chargesEnabled: false,
         payoutsEnabled: false,
@@ -4237,18 +4245,29 @@ app.get("/api/connect/status", ensureAuthenticated, async (req, res) => {
       });
     }
 
-    const acct = await stripe.accounts.retrieve(user.stripeAccountId);
+    const acct = await stripe.accounts.retrieve(acctId);
 
     return res.json({
+      ok: true,
       connected: true,
       chargesEnabled: !!acct.charges_enabled,
       payoutsEnabled: !!acct.payouts_enabled,
       detailsSubmitted: !!acct.details_submitted,
-      accountId: user.stripeAccountId,
+      accountId: acct.id,
     });
   } catch (e) {
-    console.error("connect/status failed", e?.raw || e);
-    return res.status(500).json({ error: "connect_status_failed" });
+    // ✅ show real Stripe error info so we can fix it
+    console.error("[connect/status] failed:", e);
+
+    return res.status(200).json({
+      ok: false,
+      connected: false,
+      error: "connect_status_failed",
+      message: e?.message || "unknown_error",
+      type: e?.type || "",
+      code: e?.code || "",
+      rawType: e?.rawType || "",
+    });
   }
 });
 
