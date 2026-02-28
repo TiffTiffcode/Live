@@ -122,6 +122,8 @@ if (!stripeSecretKey) {
   process.exit(1);
 }
 
+import stripeRoutes from "./routes/stripe.routes.js";
+
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
 
 // Sessions
@@ -215,7 +217,7 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), asyn
   }
 });
 
-
+app.use("/api", stripeRoutes);
 //Bookin Payment intent 
 
 app.use(express.json());
