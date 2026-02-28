@@ -618,7 +618,10 @@ const USER_ID_FIELD_NAMES = new Set(
 );
 
 
-
+app.get("/api/public/records", (req, res, next) => {
+  req.url = req.originalUrl.replace(/^\/api/, ""); // "/api/public/records" -> "/public/records"
+  next();
+}, /* then call the same handler as /public/records */);
 //////////////////////////////////////////////////////////////////////////////////////////////////
 // ------------------------------------------------------------
 // RECORDS: CREATE / UPDATE / DELETE (aligned with visibility)
