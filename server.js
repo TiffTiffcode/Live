@@ -122,7 +122,7 @@ if (!stripeSecretKey) {
   process.exit(1);
 }
 
-import stripeRoutes from "./routes/stripe.routes.js";
+const stripeRoutes = require("./routes/stripe.routes");
 
 const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-06-20" });
 
