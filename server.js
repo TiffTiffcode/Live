@@ -1112,6 +1112,20 @@ console.log("[public/records] dt found:", { id: String(dt._id), name: dt.name, c
 
     console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
 
+    console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
+
+const sampleRows = await Record.find({
+  dataTypeId: dt._id,
+  deletedAt: null,
+}).limit(5).lean();
+
+console.log("[public/records] sample raw rows for type:", dataTypeName);
+console.log(JSON.stringify(sampleRows.map(r => ({
+  _id: String(r._id),
+  values: r.values
+})), null, 2));
+
+
     const rows = await Record.find(findQuery)
       .sort({ updatedAt: -1, createdAt: -1 })
       .limit(limit)
@@ -1488,6 +1502,19 @@ app.get("/api/records", ensureAuthenticated, async (req, res) => {
       findQuery["values.ownerUserId"] = ownerParam;
       console.log("[api/records] enforced ownerUserId:", ownerParam);
     }
+
+    console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
+
+const sampleRows = await Record.find({
+  dataTypeId: dt._id,
+  deletedAt: null,
+}).limit(5).lean();
+
+console.log("[public/records] sample raw rows for type:", dataTypeName);
+console.log(JSON.stringify(sampleRows.map(r => ({
+  _id: String(r._id),
+  values: r.values
+})), null, 2));
 
     const rows = await Record.find(findQuery)
       .sort(sortObj)
@@ -4731,8 +4758,10 @@ async function chargeRent(req, res) {
                                     //Email Automation
 async function runEmailAutomations({ eventKey, record, actorUserId }) {
   try {
+     console.log("[email] runEmailAutomations eventKey:", eventKey);
     // find EmailAutomation datatype
     const emailDt = await getDataTypeByNameLoose("EmailAutomation");
+     console.log("[email] emailDt:", emailDt?._id, emailDt?.name);
     if (!emailDt?._id) return;
 
     // load enabled automations matching the event
@@ -4742,21 +4771,22 @@ async function runEmailAutomations({ eventKey, record, actorUserId }) {
       "values.Enabled": true,
       "values.Trigger": eventKey,
     }).lean();
-
+console.log("[email] matching automations:", automations.length);
     if (!automations.length) return;
 
     for (const a of automations) {
       try {
         const delayMin = Number(a.values?.SendDelayMinutes || 0);
-
+console.log("[email] automation found:", a._id, a.values);
         const ctx = await buildEmailContext({
           eventKey,
           record,
           actorUserId,
           audience: String(a.values?.Audience || "").toLowerCase(),
         });
-
+console.log("[email] ctx:", ctx);
         const toEmail = ctx?.recipient?.email;
+         console.log("[email] recipient email:", toEmail);
         if (!toEmail) continue;
 
         const subjectTpl = String(a.values?.SubjectTemplate || "");
@@ -4764,7 +4794,8 @@ async function runEmailAutomations({ eventKey, record, actorUserId }) {
 
         const subject = renderTemplate(subjectTpl, ctx);
         const html = renderTemplate(bodyTpl, ctx);
-
+       console.log("[email] rendered subject:", subject);
+        console.log("[email] rendered html:", html);
         if (delayMin > 0) {
           // keep simple for now: immediate send only
           // later you can queue delayed sends
@@ -4777,6 +4808,7 @@ async function runEmailAutomations({ eventKey, record, actorUserId }) {
           html,
           replyTo: a.values?.ReplyToEmail || null,
         });
+       console.log("[email] sent ok"); 
       } catch (err) {
         console.error("[email automation] one automation failed:", err);
       }
