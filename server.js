@@ -71,6 +71,7 @@ const Record   = require('./models/Record');
 const DataType = require('./models/DataType'); 
 const Field = require('./models/Field');
 const OptionSet = require('./models/OptionSet');
+const OptionValue = require("./models/OptionValue");
 const Hold   = require('./models/Hold');
 const recordsCtrl = require('./controllers/records.js'); // keep .js explicit
 const holdsRouter  = require('./routes/holds');          // routes/holds.js exports a router
@@ -645,6 +646,16 @@ app.post("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
       deletedAt: null,
     });
 
+    // 🔥 generic automation hook
+try {
+  await runEmailAutomations({
+    eventKey: `${canonName(typeName)}.created`,
+    record: doc,
+    actorUserId: sid,
+  });
+} catch (err) {
+  console.error("[email automations] run failed:", err);
+}
     return res.status(201).json({ items: [doc] });
   } catch (e) {
     console.error("POST /api/records/:typeName failed:", e);
@@ -3079,8 +3090,13 @@ function canon(s) {
 
 // ---------- Option Sets ----------
 app.get('/api/optionsets', async (req, res) => {
-  const sets = await OptionSet.find({ deletedAt: null }).sort({ createdAt: 1 }).lean();
-  res.json(sets);
+  try {
+    const sets = await OptionSet.find({ deletedAt: null }).sort({ createdAt: 1 }).lean();
+    return res.json(sets); // keep as array since your frontend expects array
+  } catch (e) {
+    console.error("GET /api/optionsets error:", e);
+    return res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/optionsets', /*ensureAuthenticated,*/ async (req, res) => {
@@ -3142,29 +3158,20 @@ app.delete('/api/optionsets/:id', /*ensureAuthenticated,*/ async (req, res) => {
   }
 });
 
-const OptionSchema = new mongoose.Schema({
-  label: { type: String, required: true },
-  value: { type: String, required: true },
-}, { _id: false });
-
-const OptionSetSchema = new mongoose.Schema({
-  name: { type: String, required: true },      // e.g. "Service Categories"
-  key:  { type: String, unique: true },        // e.g. "service_categories"
-  options: { type: [OptionSchema], default: [] },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'AuthUser' },
-  deletedAt: { type: Date, default: null },
-}, { timestamps: true });
-
-module.exports = mongoose.models.OptionSet || mongoose.model('OptionSet', OptionSetSchema);
 
 // ---------- Option Values ----------
 app.get('/api/optionsets/:id/values', async (req, res) => {
-  const { id } = req.params;
-  if (!mongoose.isValidObjectId(id)) return res.json([]);
-  const vals = await OptionValue.find({ optionSetId: id, deletedAt: null })
-    .sort({ order: 1, createdAt: 1 })
-    .lean();
-  res.json(vals);
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) return res.json([]);
+    const vals = await OptionValue.find({ optionSetId: id, deletedAt: null })
+      .sort({ order: 1, createdAt: 1 })
+      .lean();
+    return res.json(vals);
+  } catch (e) {
+    console.error("GET /api/optionsets/:id/values error:", e);
+    return res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/optionsets/:id/values', /*ensureAuthenticated,*/ async (req, res) => {
@@ -4719,6 +4726,174 @@ async function chargeRent(req, res) {
   res.json({ clientSecret: paymentIntent.client_secret });
 }
 
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+                                    //Email Automation
+async function runEmailAutomations({ eventKey, record, actorUserId }) {
+  try {
+    // find EmailAutomation datatype
+    const emailDt = await getDataTypeByNameLoose("EmailAutomation");
+    if (!emailDt?._id) return;
+
+    // load enabled automations matching the event
+    const automations = await Record.find({
+      dataTypeId: emailDt._id,
+      deletedAt: null,
+      "values.Enabled": true,
+      "values.Trigger": eventKey,
+    }).lean();
+
+    if (!automations.length) return;
+
+    for (const a of automations) {
+      try {
+        const delayMin = Number(a.values?.SendDelayMinutes || 0);
+
+        const ctx = await buildEmailContext({
+          eventKey,
+          record,
+          actorUserId,
+          audience: String(a.values?.Audience || "").toLowerCase(),
+        });
+
+        const toEmail = ctx?.recipient?.email;
+        if (!toEmail) continue;
+
+        const subjectTpl = String(a.values?.SubjectTemplate || "");
+        const bodyTpl = String(a.values?.BodyHtmlTemplate || "");
+
+        const subject = renderTemplate(subjectTpl, ctx);
+        const html = renderTemplate(bodyTpl, ctx);
+
+        if (delayMin > 0) {
+          // keep simple for now: immediate send only
+          // later you can queue delayed sends
+          console.log("[email automation] delay requested:", delayMin);
+        }
+
+        await sendEmailResend({
+          to: toEmail,
+          subject,
+          html,
+          replyTo: a.values?.ReplyToEmail || null,
+        });
+      } catch (err) {
+        console.error("[email automation] one automation failed:", err);
+      }
+    }
+  } catch (err) {
+    console.error("[runEmailAutomations] failed:", err);
+  }
+}
+
+async function buildEmailContext({ eventKey, record, actorUserId, audience }) {
+  const rec = record?.toObject ? record.toObject() : record;
+  const values = rec?.values || {};
+
+  const typeId = String(rec?.dataTypeId || "");
+  const dt = typeId ? await DataType.findById(typeId).lean() : null;
+  const typeName = String(dt?.nameCanonical || "").toLowerCase();
+
+  // generic context
+  const ctx = {
+    eventKey,
+    actorUserId,
+    record: values,
+    recipient: null,
+  };
+
+  // Appointment-created example
+  if (typeName === "appointment") {
+    const businessId =
+      values?.Business?._id ||
+      values?.businessId ||
+      null;
+
+    const clientUserId =
+      values?.Client?._id ||
+      values?.clientId ||
+      null;
+
+    let business = null;
+    if (businessId && mongoose.isValidObjectId(String(businessId))) {
+      const businessRec = await Record.findById(businessId).lean();
+      business = businessRec?.values || null;
+    }
+
+    let client = null;
+    if (clientUserId && mongoose.isValidObjectId(String(clientUserId))) {
+      client = await AuthUser.findById(clientUserId).lean();
+    }
+
+    ctx.appointment = values;
+    ctx.business = business;
+    ctx.client = client;
+
+    if (audience === "client" || audience === "clients") {
+      ctx.recipient = client ? { email: client.email } : null;
+    }
+
+    return ctx;
+  }
+
+  return ctx;
+}
+
+//Send Single Email 
+app.post("/api/email/send", ensureAuthenticated, async (req, res) => {
+  try {
+    const { to, subject, html, replyTo } = req.body || {};
+
+    if (!to) return res.status(400).json({ error: "to is required" });
+    if (!subject) return res.status(400).json({ error: "subject is required" });
+    if (!html) return res.status(400).json({ error: "html is required" });
+
+    console.log("[/api/email/send] payload:", { to, subject, replyTo, htmlLength: html.length });
+
+    const out = await sendEmailResend({
+      to,
+      subject,
+      html,
+      replyTo: replyTo || null,
+    });
+
+    return res.json({ ok: true, out });
+  } catch (e) {
+    console.error("POST /api/email/send failed:", e);
+    return res.status(500).json({
+      error: "Failed to send email",
+      detail: e.message,
+    });
+  }
+});
+
+async function sendEmailResend({ to, subject, html, replyTo = null }) {
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is missing");
+  }
+
+  const payload = {
+    from: "SuiteSeat <info@suiteseat.io>", // use a verified sender/domain
+    to: Array.isArray(to) ? to : [to],
+    subject,
+    html,
+  };
+
+  if (replyTo) {
+    payload.reply_to = replyTo;
+  }
+
+  const result = await resend.emails.send(payload);
+  console.log("[resend] send result:", result);
+  return result;
+}
+// super simple template renderer: {{client.firstName}}
+function renderTemplate(template, ctx) {
+  return String(template || "").replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, path) => {
+    const val = path.split(".").reduce((acc, key) => (acc ? acc[key] : undefined), ctx);
+    return val == null ? "" : String(val);
+  });
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //                                 //Page Routes
 
