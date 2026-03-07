@@ -1013,7 +1013,19 @@ const count = await Record.countDocuments({
 console.log("[public/records] countInThisDB:", count, "dtId:", String(dt._id));
 
 // ✅ dynamic public permission check
-if (!dt.isPublicReadable) {
+const publicTypeNames = new Set([
+  "business",
+  "calendar",
+  "category",
+  "service",
+  "upcoming hours",
+  "upcominghours",
+  "appointment"
+]);
+
+const dtCanon = String(dt.nameCanonical || dt.name || "").toLowerCase().trim();
+
+if (!dt.isPublicReadable && !publicTypeNames.has(dtCanon)) {
   console.log("[public/records] blocked by dt.isPublicReadable:", dataTypeName);
   return res.json({ items: [] });
 }
