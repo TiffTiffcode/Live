@@ -778,6 +778,129 @@ console.log("[DELETE] raw record (by id):", raw && {
 });
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
+app.get("/api/records", ensureAuthenticated, async (req, res) => {
+  try {
+    const me = String(req.session?.userId || "");
+    if (!me) return res.status(401).json({ items: [] });
+
+    const dataTypeId = String(req.query?.dataTypeId || "").trim();
+    if (!mongoose.isValidObjectId(dataTypeId)) return res.json({ items: [] });
+
+    const dt = await DataType.findById(dataTypeId).lean();
+    if (!dt?._id) return res.json({ items: [] });
+
+    // logs (optional)
+    console.log("[api/records] dt found:", {
+      id: String(dt._id),
+      name: dt.name,
+      canon: dt.nameCanonical,
+      isPublicReadable: dt.isPublicReadable,
+    });
+    console.log("[api/records] db:", mongoose.connection.db?.databaseName);
+
+    const count = await Record.countDocuments({ dataTypeId: dt._id, deletedAt: null });
+    console.log("[api/records] countInThisDB:", count, "dtId:", String(dt._id));
+
+    // match your existing GET /api/records/:typeName behavior
+    const nameCanon = String(dt.nameCanonical || "").toLowerCase();
+
+    // ✅ include client here too (fixes Client list issues)
+    const TOP_LEVEL = new Set([
+      "business", "calendar", "category", "service",
+      "client", // ✅ ADD
+      "course", "coursesection", "courselesson", "coursechapter",
+      "storetheme", "store_theme", "store theme",
+    ]);
+
+    const enforcedWhere = TOP_LEVEL.has(nameCanon)
+      ? {
+          $or: [
+            { createdBy: me },
+            { "values.ownerUserId": me },
+            { "values.ownerUserId._id": me },
+            { owners: me },
+            { members: me },
+          ],
+        }
+      : await enforcedWhereForUser({ dataTypeId: String(dt._id), userId: me });
+
+    const limit = Math.min(Number(req.query.limit || 200), 2000);
+    const sort = String(req.query.sort || "-createdAt");
+    const sortObj = sort.startsWith("-") ? { [sort.slice(1)]: -1 } : { [sort]: 1 };
+
+    // ✅ ownerUserId filter (FIXED — no mongoWhere undefined)
+    const ownerParam = String(req.query.ownerUserId || "").trim();
+
+    const findQuery = {
+      dataTypeId: dt._id,
+      deletedAt: null,
+      ...enforcedWhere,
+    };
+
+    if (ownerParam) {
+      findQuery["values.ownerUserId"] = ownerParam;
+      console.log("[api/records] enforced ownerUserId:", ownerParam);
+    }
+
+    console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
+
+const sampleRows = await Record.find({
+  dataTypeId: dt._id,
+  deletedAt: null,
+}).limit(5).lean();
+
+console.log("[api/records] sample raw rows for type:", dt.name);
+console.log(JSON.stringify(sampleRows.map(r => ({
+  _id: String(r._id),
+  values: r.values
+})), null, 2));
+
+const rows = await Record.find(findQuery)
+  .sort({ updatedAt: -1, createdAt: -1 })
+  .limit(limit)
+  .lean();
+
+console.log("[public/records] MATCHED rows count:", rows.length);
+
+return res.json({ items: rows });
+  } catch (e) {
+    console.error("GET /api/records (alias) failed:", e);
+    return res.status(500).json({ items: [] });
+  }
+});
+
+app.get("/api/records/:typeName/:id", ensureAuthenticated, async (req, res) => {
+  try {
+    const me = String(req.session.userId || "");
+    const typeName = decodeURIComponent(req.params.typeName || "").trim();
+    const id = String(req.params.id || "").trim();
+
+    if (!me) return res.status(401).json({ message: "Not logged in" });
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "Invalid id" });
+
+    const dt = await DataType.findOne({ nameCanonical: typeName.toLowerCase() }).lean();
+    if (!dt) return res.status(404).json({ message: "DataType not found" });
+
+    const enforcedWhere = await enforcedWhereForUser({
+      dataTypeId: String(dt._id),
+      userId: me,
+    });
+
+    const row = await Record.findOne({
+      dataTypeId: dt._id,
+      deletedAt: null,
+      $and: [
+        { _id: id },
+        enforcedWhere,
+      ],
+    }).lean();
+
+    return res.json({ items: row ? [row] : [] });
+  } catch (e) {
+    console.error("GET /api/records/:typeName/:id failed:", e);
+    return res.status(500).json({ message: "Failed to load record" });
+  }
+});
                                         
 app.get("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
   try {
@@ -908,38 +1031,7 @@ const enforcedWhere = TOP_LEVEL.has(nameCanon)
   }
 });
 
-app.get("/api/records/:typeName/:id", ensureAuthenticated, async (req, res) => {
-  try {
-    const me = String(req.session.userId || "");
-    const typeName = decodeURIComponent(req.params.typeName || "").trim();
-    const id = String(req.params.id || "").trim();
 
-    if (!me) return res.status(401).json({ message: "Not logged in" });
-    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "Invalid id" });
-
-    const dt = await DataType.findOne({ nameCanonical: typeName.toLowerCase() }).lean();
-    if (!dt) return res.status(404).json({ message: "DataType not found" });
-
-    const enforcedWhere = await enforcedWhereForUser({
-      dataTypeId: String(dt._id),
-      userId: me,
-    });
-
-    const row = await Record.findOne({
-      dataTypeId: dt._id,
-      deletedAt: null,
-      $and: [
-        { _id: id },
-        enforcedWhere,
-      ],
-    }).lean();
-
-    return res.json({ items: row ? [row] : [] });
-  } catch (e) {
-    console.error("GET /api/records/:typeName/:id failed:", e);
-    return res.status(500).json({ message: "Failed to load record" });
-  }
-});
 
 
 // PUBLIC READ: /public/records?dataType=Upcoming%20Hours&where=...
@@ -947,6 +1039,7 @@ app.get("/api/records/:typeName/:id", ensureAuthenticated, async (req, res) => {
 // - Supports ?where JSON and simple query params
 // - Maps filters to values.<Field> because Record stores fields in values
 app.get("/public/records", async (req, res) => {
+  
   try {
     const dataTypeName = String(req.query.dataType || "").trim();
     if (!dataTypeName) return res.json({ items: [] });
@@ -996,6 +1089,12 @@ app.get("/public/records", async (req, res) => {
 const dt = await getDataTypeByNameLoose(dataTypeName);
 if (!dt?._id) return res.json({ items: [] });
 
+console.log("[public/records] RESOLVED DT:", {
+  queryName: dataTypeName,
+  dtId: String(dt._id),
+  dtName: dt.name,
+  dtCanon: dt.nameCanonical,
+});
 console.log("[public/records] dt found:", {
   id: String(dt._id),
   name: dt.name,
@@ -1100,7 +1199,7 @@ console.log("[public/records] dt found:", { id: String(dt._id), name: dt.name, c
     if (rewritten?.$and) andParts.push({ $and: rewritten.$and });
     if (rewritten?.$or) andParts.push({ $or: rewritten.$or });
 
-    let mongoWhere = andParts.length ? { $and: andParts } : {};
+  const mongoWhere = andParts.length ? { $and: andParts } : {};
 
     console.log("[public/records] mongoWhere BEFORE owner:", mongoWhere);
 
@@ -1122,28 +1221,34 @@ console.log("[public/records] dt found:", { id: String(dt._id), name: dt.name, c
       console.log("[public/records] enforced ownerUserId:", ownerParam);
     }
 
-    console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
 
-    console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
 
-const sampleRows = await Record.find({
+
+console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
+
+const rawRows = await Record.find({
   dataTypeId: dt._id,
   deletedAt: null,
 }).limit(5).lean();
 
-console.log("[public/records] sample raw rows for type:", dataTypeName);
-console.log(JSON.stringify(sampleRows.map(r => ({
+console.log("[public/records] RAW rows count for dt:", rawRows.length);
+console.log("[public/records] RAW rows sample:", JSON.stringify(rawRows.map(r => ({
   _id: String(r._id),
   values: r.values
 })), null, 2));
 
+const rows = await Record.find(findQuery)
+  .sort({ updatedAt: -1, createdAt: -1 })
+  .limit(limit)
+  .lean();
 
-    const rows = await Record.find(findQuery)
-      .sort({ updatedAt: -1, createdAt: -1 })
-      .limit(limit)
-      .lean();
+console.log("[public/records] MATCHED rows count:", rows.length);
+console.log("[public/records] MATCHED rows sample:", JSON.stringify(rows.map(r => ({
+  _id: String(r._id),
+  values: r.values
+})), null, 2));
 
-    return res.json({ items: rows });
+return res.json({ items: rows });
   } catch (e) {
     console.error("GET /public/records failed:", e);
     return res.status(500).json({ items: [] });
@@ -1254,12 +1359,6 @@ function buildRefOrScalarMatch(field, value) {
 
   if (!strIds.length && !objIds.length) return { _id: { $exists: true } };
 
-  const eqStr = strIds.length === 1 ? strIds[0] : null;
-  const inStr = { $in: strIds };
-
-  const eqObj = objIds.length === 1 ? objIds[0] : null;
-  const inObj = { $in: objIds };
-
   // 🔁 Generic paths we’ll try (values + top-level)
   const paths = [
     `values.${field}`,
@@ -1273,46 +1372,46 @@ function buildRefOrScalarMatch(field, value) {
     `${field} Id`,
   ];
 
-  // 🔥 Common aliases (works for Business/Calendar/Category/Service but STILL generic)
-const f = String(field || "").toLowerCase();
+  // 🔥 Common aliases
+  const f = String(field || "").toLowerCase();
 
-// handle "Category" param matching both shapes:
-if (f === "category") paths.push(
-  "categoryId",
-  "values.categoryId",
-  "values.Category",
-  "values.Category._id"
-);
+  if (f === "category") paths.push(
+    "categoryId",
+    "values.categoryId",
+    "values.Category",
+    "values.Category._id"
+  );
 
-// handle "Business":
-if (f === "business") paths.push(
-  "businessId",
-  "values.businessId",
-  "values.Business",
-  "values.Business._id"
-);
+  if (f === "business") paths.push(
+    "businessId",
+    "values.businessId",
+    "values.Business",
+    "values.Business._id"
+  );
 
-// handle "Calendar":
-if (f === "calendar") paths.push(
-  "calendarId",
-  "values.calendarId",
-  "values.Calendar",
-  "values.Calendar._id"
-);
+  if (f === "calendar") paths.push(
+    "calendarId",
+    "values.calendarId",
+    "values.Calendar",
+    "values.Calendar._id"
+  );
 
   const orParts = [];
 
   for (const p of paths) {
-    if (eqStr) orParts.push({ [p]: eqStr });
-    if (strIds.length) orParts.push({ [p]: inStr });
+    for (const s of strIds) {
+      orParts.push({ [p]: s });                 // scalar string
+      orParts.push({ [p]: { $in: [s] } });     // array of strings
+    }
 
-    if (eqObj) orParts.push({ [p]: eqObj });
-    if (objIds.length) orParts.push({ [p]: inObj });
+    for (const o of objIds) {
+      orParts.push({ [p]: o });                // scalar ObjectId
+      orParts.push({ [p]: { $in: [o] } });     // array of ObjectIds
+    }
   }
 
   return { $or: orParts };
 }
-
 
 
  app.get('/appointment-settings',
@@ -1449,96 +1548,6 @@ app.get("/api/cloudinary/sign", (req, res) => {
 // Keeps your existing /api/records/:typeName routes intact
 // =====================================================
 
-// LIST by dataTypeId: /api/records?dataTypeId=...&limit=500&sort=-createdAt
-// LIST by dataTypeId: /api/records?dataTypeId=...&limit=500&sort=-createdAt
-app.get("/api/records", ensureAuthenticated, async (req, res) => {
-  try {
-    const me = String(req.session?.userId || "");
-    if (!me) return res.status(401).json({ items: [] });
-
-    const dataTypeId = String(req.query?.dataTypeId || "").trim();
-    if (!mongoose.isValidObjectId(dataTypeId)) return res.json({ items: [] });
-
-    const dt = await DataType.findById(dataTypeId).lean();
-    if (!dt?._id) return res.json({ items: [] });
-
-    // logs (optional)
-    console.log("[api/records] dt found:", {
-      id: String(dt._id),
-      name: dt.name,
-      canon: dt.nameCanonical,
-      isPublicReadable: dt.isPublicReadable,
-    });
-    console.log("[api/records] db:", mongoose.connection.db?.databaseName);
-
-    const count = await Record.countDocuments({ dataTypeId: dt._id, deletedAt: null });
-    console.log("[api/records] countInThisDB:", count, "dtId:", String(dt._id));
-
-    // match your existing GET /api/records/:typeName behavior
-    const nameCanon = String(dt.nameCanonical || "").toLowerCase();
-
-    // ✅ include client here too (fixes Client list issues)
-    const TOP_LEVEL = new Set([
-      "business", "calendar", "category", "service",
-      "client", // ✅ ADD
-      "course", "coursesection", "courselesson", "coursechapter",
-      "storetheme", "store_theme", "store theme",
-    ]);
-
-    const enforcedWhere = TOP_LEVEL.has(nameCanon)
-      ? {
-          $or: [
-            { createdBy: me },
-            { "values.ownerUserId": me },
-            { "values.ownerUserId._id": me },
-            { owners: me },
-            { members: me },
-          ],
-        }
-      : await enforcedWhereForUser({ dataTypeId: String(dt._id), userId: me });
-
-    const limit = Math.min(Number(req.query.limit || 200), 2000);
-    const sort = String(req.query.sort || "-createdAt");
-    const sortObj = sort.startsWith("-") ? { [sort.slice(1)]: -1 } : { [sort]: 1 };
-
-    // ✅ ownerUserId filter (FIXED — no mongoWhere undefined)
-    const ownerParam = String(req.query.ownerUserId || "").trim();
-
-    const findQuery = {
-      dataTypeId: dt._id,
-      deletedAt: null,
-      ...enforcedWhere,
-    };
-
-    if (ownerParam) {
-      findQuery["values.ownerUserId"] = ownerParam;
-      console.log("[api/records] enforced ownerUserId:", ownerParam);
-    }
-
-    console.log("[public/records] FINAL findQuery:", JSON.stringify(findQuery, null, 2));
-
-const sampleRows = await Record.find({
-  dataTypeId: dt._id,
-  deletedAt: null,
-}).limit(5).lean();
-
-console.log("[public/records] sample raw rows for type:", dataTypeName);
-console.log(JSON.stringify(sampleRows.map(r => ({
-  _id: String(r._id),
-  values: r.values
-})), null, 2));
-
-    const rows = await Record.find(findQuery)
-      .sort(sortObj)
-      .limit(limit)
-      .lean();
-
-    return res.json({ items: rows }); // ✅ keep your consistent shape
-  } catch (e) {
-    console.error("GET /api/records (alias) failed:", e);
-    return res.status(500).json({ items: [] });
-  }
-});
 
 // CREATE by dataTypeId: POST /api/records { dataTypeId, values }
 app.post("/api/records", ensureAuthenticated, async (req, res) => {
