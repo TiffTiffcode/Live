@@ -33,10 +33,10 @@ async function getDTLoose(name) {
 router.get('/public/records', async (req, res) => {
   try {
     const {
-      dataType,          // e.g. "Calendar" | "Service" | "Category"
+      dataType,
       _id,
-      Date: dateISO,     // YYYY-MM-DD
-      Calendar,          // calendar ref in various shapes
+      Date: dateISO,
+      Calendar,
       'Calendar._id': CalendarDot,
       calendarId,
       Business,
@@ -44,76 +44,113 @@ router.get('/public/records', async (req, res) => {
     } = req.query;
 
     const q = { deletedAt: null };
-    if (_id) q._id = _id;
+    if (_id) q._id = String(_id).trim();
 
-    // Resolve datatype (optional)
     let dtId = null;
     if (dataType) {
       dtId = await getDTLoose(dataType);
-      if (!dtId) return res.json([]); // unknown type → nothing public
+      if (!dtId) return res.json([]);
       q.dataTypeId = dtId;
     }
 
-    // 🔒 Business scoping (strong)
     const biz = String(Business || businessId || '').trim();
-    if (needsBusinessScope(dataType)) {
-      // For these public lists, Business is REQUIRED
-      if (!biz) return res.json([]);
+    if (needsBusinessScope(dataType) && !biz) {
+      return res.json([]);
     }
+
     if (biz) {
-      // Enforce on server side
       q.$and = (q.$and || []).concat([{
         $or: [
+          // scalar string
           { 'values.Business': biz },
           { 'values.businessId': biz },
           { 'values.ownerBusinessId': biz },
           { 'values.ownerId': biz },
-          { 'values["Business Id"]': biz },
-          { 'values.Business._id': biz }
+          { 'values.Business Id': biz },
+          { 'values.Business._id': biz },
+
+          // arrays
+          { 'values.Business': { $in: [biz] } },
+          { 'values.businessId': { $in: [biz] } },
+          { 'values.ownerBusinessId': { $in: [biz] } },
+          { 'values.ownerId': { $in: [biz] } },
+          { 'values.Business Id': { $in: [biz] } },
         ]
       }]);
     }
 
-    // Optional calendar scoping (accept many shapes)
-    const cal = Calendar || CalendarDot || calendarId;
+    const cal = String(Calendar || CalendarDot || calendarId || '').trim();
     if (cal) {
-      const calStr = String(cal);
       q.$and = (q.$and || []).concat([{
         $or: [
-          { 'values.calendarId': calStr },
-          { 'values.CalendarId': calStr },
-          { 'values.Calendar._id': calStr },
-          { 'values.Calendar': calStr } // string form
+          // scalar string
+          { 'values.calendarId': cal },
+          { 'values.CalendarId': cal },
+          { 'values.Calendar._id': cal },
+          { 'values.Calendar': cal },
+          { 'values.Calendar Id': cal },
+
+          // arrays
+          { 'values.calendarId': { $in: [cal] } },
+          { 'values.CalendarId': { $in: [cal] } },
+          { 'values.Calendar': { $in: [cal] } },
+          { 'values.Calendar Id': { $in: [cal] } },
         ]
       }]);
     }
 
-    // Optional date scoping
     if (dateISO) {
       const d = String(dateISO).slice(0, 10);
-      // match the YYYY-MM-DD prefix regardless of time suffix
       q['values.Date'] = { $regex: `^${d}` };
     }
 
-    // Limit fields to avoid leakage
     const rows = await Record.find(q, { values: 1 }).lean();
 
-    // 🔒 Second-pass client-safe filter (belt & suspenders)
-    const filtered = !biz ? rows : rows.filter(r => {
+    const filtered = rows.filter(r => {
       const v = r.values || {};
-      const candidates = [
-        v.Business, v.businessId, v.ownerBusinessId, v.ownerId, v['Business Id'],
+
+      const bizCandidates = [
+        ...(Array.isArray(v.Business) ? v.Business : [v.Business]),
+        ...(Array.isArray(v.businessId) ? v.businessId : [v.businessId]),
+        ...(Array.isArray(v.ownerBusinessId) ? v.ownerBusinessId : [v.ownerBusinessId]),
+        ...(Array.isArray(v.ownerId) ? v.ownerId : [v.ownerId]),
+        ...(Array.isArray(v['Business Id']) ? v['Business Id'] : [v['Business Id']]),
         v.Business && v.Business._id
-      ];
-      return candidates.map(toId).map(String).includes(biz);
+      ]
+        .filter(Boolean)
+        .map(toId)
+        .map(String);
+
+      const calCandidates = [
+        ...(Array.isArray(v.Calendar) ? v.Calendar : [v.Calendar]),
+        ...(Array.isArray(v.calendarId) ? v.calendarId : [v.calendarId]),
+        ...(Array.isArray(v.CalendarId) ? v.CalendarId : [v.CalendarId]),
+        ...(Array.isArray(v['Calendar Id']) ? v['Calendar Id'] : [v['Calendar Id']]),
+        v.Calendar && v.Calendar._id
+      ]
+        .filter(Boolean)
+        .map(toId)
+        .map(String);
+
+      if (biz && !bizCandidates.includes(biz)) return false;
+      if (cal && !calCandidates.includes(cal)) return false;
+
+      return true;
     });
 
-    // Public shape
-    res.json(filtered.map(r => ({ _id: String(r._id), values: r.values || {} })));
+    console.log('[public/records] dataType:', dataType);
+    console.log('[public/records] biz:', biz);
+    console.log('[public/records] cal:', cal);
+    console.log('[public/records] mongo rows:', rows.length);
+    console.log('[public/records] filtered rows:', filtered.length);
+
+    res.json(filtered.map(r => ({
+      _id: String(r._id),
+      values: r.values || {}
+    })));
   } catch (e) {
     console.error('[public/records] error', e);
     res.status(500).json({ error: 'server_error' });
   }
 });
-
 module.exports = router;
