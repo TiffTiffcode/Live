@@ -642,6 +642,13 @@ app.post("/api/records/:typeName", ensureAuthenticated, async (req, res) => {
       updatedBy: sid,
       deletedAt: null,
     });
+    console.log("[email automations] about to run", {
+      typeName,
+      eventKey: `${canonName(typeName)}.created`,
+      recordId: String(doc._id),
+      actorUserId: sid,
+      values: doc.values,
+    });
 
     // 🔥 generic automation hook
 try {
@@ -650,6 +657,12 @@ try {
     record: doc,
     actorUserId: sid,
   });
+
+        console.log("[email automations] finished ok", {
+        eventKey: `${canonName(typeName)}.created`,
+        recordId: String(doc._id),
+      });
+      
 } catch (err) {
   console.error("[email automations] run failed:", err);
 }
