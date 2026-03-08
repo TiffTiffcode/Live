@@ -5148,6 +5148,9 @@ app.get('/client-dashboard', ensureAuthenticated, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'client-dashboard.html'));
 });
 
+app.get('/client-dashboard.html', ensureAuthenticated, (req, res) => {
+  res.redirect('/client-dashboard');
+});
 
 // Health
 app.get('/api/health', (req, res) => res.json({ ok: true }));
