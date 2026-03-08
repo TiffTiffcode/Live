@@ -2581,11 +2581,11 @@ app.get('/api/me/records', ensureAuthenticated, async (req, res) => {
 
 
 // CLIENT signup (customers)
-app.post("/signup", async (req, res) => {
+app.post("/signup/pro", async (req, res) => {
   try {
     const { firstName, lastName, email, password, phone } = req.body || {};
     if (!email || !password) {
-      return res.status(400).json({ message: "Email & password required" });
+      return res.status(400).json({ message: "Missing email/password" });
     }
 
     const emailNorm = String(email).toLowerCase().trim();
@@ -2601,26 +2601,18 @@ app.post("/signup", async (req, res) => {
       email: emailNorm,
       phone: phone || "",
       passwordHash,
-      roles: ["client"],
+      roles: ["pro"],
     });
 
-    // ✅ ALWAYS store as string + keep session shape consistent
-    req.session.userId = String(user._id);
-    req.session.roles = user.roles || ["client"];
-    req.session.user = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      roles: req.session.roles,
-    };
+    await establishLoginSession(req, user);
 
-    return res.json({
+    return res.status(201).json({
       ok: true,
       user: req.session.user,
+      redirect: "/appointment-settings",
     });
   } catch (e) {
-    console.error("[signup client] failed:", e);
+    console.error("[signup pro] failed:", e);
     return res.status(500).json({ message: "Signup failed" });
   }
 });
@@ -2690,14 +2682,7 @@ app.post("/api/guest-signup", async (req, res) => {
       roles: ["client"],
     });
 
-    req.session.userId = String(user._id);
-    req.session.user = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName || "",
-      lastName: user.lastName || "",
-    };
-    await req.session.save();
+    await establishLoginSession(req, user);
 
     return res.json({ ok: true, user: req.session.user });
   } catch (e) {
@@ -2826,15 +2811,21 @@ app.get('/api/me', (req, res) => {
 
 // server.js (or routes/auth.js)
 app.post('/api/logout', (req, res) => {
-  try {
-    // destroy server session
-    req.session?.destroy?.(() => {});
-    // clear the session cookie
-    res.clearCookie('connect.sid'); // or your custom cookie name
+  req.session.destroy((err) => {
+    res.clearCookie('connect.sid', {
+      path: '/',
+      domain: '.suiteseat.io',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+    });
+
+    if (err) {
+      console.error('logout destroy error:', err);
+    }
+
     return res.status(200).json({ ok: true });
-  } catch (e) {
-    return res.status(200).json({ ok: true });
-  }
+  });
 });
 
 
@@ -2868,9 +2859,8 @@ app.get("/check-login", async (req, res) => {
     if (!u) return res.json({ loggedIn: false });
 
     let first = String(u.firstName || u.first_name || "").trim();
-    let last  = String(u.lastName  || u.last_name  || "").trim();
+    let last  = String(u.lastName || u.last_name || "").trim();
 
-    // Optional enrich from Record if missing (keep your logic if you want)
     if (!first || !last) {
       try {
         const profile = await Record.findOne({
@@ -2886,31 +2876,31 @@ app.get("/check-login", async (req, res) => {
 
         const pv = profile?.values || {};
         const pfFirst = String(pv["First Name"] || pv.firstName || pv.first_name || "").trim();
-        const pfLast  = String(pv["Last Name"]  || pv.lastName  || pv.last_name  || "").trim();
+        const pfLast  = String(pv["Last Name"] || pv.lastName || pv.last_name || "").trim();
 
         if (!first && pfFirst) first = pfFirst;
-        if (!last  && pfLast)  last  = pfLast;
-      } catch {}
+        if (!last && pfLast) last = pfLast;
+      } catch (err) {
+        console.error("[check-login] profile enrich error:", err);
+      }
     }
 
     const name = [first, last].filter(Boolean).join(" ").trim();
 
-    // Keep session cache in sync (optional)
-    req.session.user = req.session.user || {};
-    req.session.user.email = req.session.user.email || u.email || "";
-    req.session.user.firstName = first;
-    req.session.user.lastName  = last;
+    req.session.user = {
+      _id: String(u._id),
+      email: u.email || "",
+      firstName: first || "",
+      lastName: last || "",
+      roles: req.session.roles || [],
+    };
+
+    await req.session.save();
 
     res.json({
       loggedIn: true,
       userId: String(u._id),
-      user: {
-        id: String(u._id),
-        email: u.email || "",
-        firstName: first || "",
-        lastName: last || "",
-        name: name || "",
-      },
+      user: req.session.user,
       roles: req.session.roles || [],
     });
   } catch (e) {
@@ -2918,8 +2908,6 @@ app.get("/check-login", async (req, res) => {
     res.status(500).json({ loggedIn: false });
   }
 });
-
-
 
 
 

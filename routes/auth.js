@@ -7,6 +7,30 @@ const AuthUser = require('../models/AuthUser');
 
 const norm = s => String(s || '').toLowerCase().trim();
 
+// ✅ add this here
+function establishLoginSession(req, user) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) return reject(err);
+
+      req.session.userId = String(user._id);
+      req.session.roles = Array.isArray(user.roles) ? user.roles : [];
+
+      req.session.user = {
+        _id: String(user._id),
+        email: user.email || "",
+        firstName: user.firstName || "",
+        lastName: user.lastName || "",
+        roles: req.session.roles,
+      };
+
+      req.session.save((saveErr) => {
+        if (saveErr) return reject(saveErr);
+        resolve();
+      });
+    });
+  });
+}
 /* ------------------------------ LOGIN ------------------------------ */
 router.post('/api/login', async (req, res) => {
   try {
@@ -17,14 +41,7 @@ router.post('/api/login', async (req, res) => {
     const ok = await bcrypt.compare(String(password || ''), user.passwordHash);
     if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
 
-    req.session.userId = String(user._id);
-    req.session.user = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName || '',
-      lastName:  user.lastName  || ''
-    };
-    await req.session.save();
+    await establishLoginSession(req, user);
 
     res.json({ ok: true, user: req.session.user });
   } catch (e) {
@@ -50,12 +67,15 @@ router.post('/signup', async (req, res) => {
 
     const passwordHash = await bcrypt.hash(String(password), 10);
     const user = await AuthUser.create({
-      firstName, lastName, email: norm(email), phone, passwordHash, roles: ['client']
+      firstName,
+      lastName,
+      email: norm(email),
+      phone,
+      passwordHash,
+      roles: ['client']
     });
 
-    req.session.userId = String(user._id);
-    req.session.user = { _id: String(user._id), email: user.email, firstName: user.firstName || '', lastName: user.lastName || '' };
-    await req.session.save();
+    await establishLoginSession(req, user);
 
     res.status(201).json({ ok: true, user: req.session.user });
   } catch (e) {
@@ -74,14 +94,21 @@ router.post('/signup/pro', async (req, res) => {
 
     const passwordHash = await bcrypt.hash(String(password), 10);
     const user = await AuthUser.create({
-      firstName, lastName, email: norm(email), phone, passwordHash, roles: ['pro']
+      firstName,
+      lastName,
+      email: norm(email),
+      phone,
+      passwordHash,
+      roles: ['pro']
     });
 
-    req.session.userId = String(user._id);
-    req.session.user = { _id: String(user._id), email: user.email, firstName: user.firstName || '', lastName: user.lastName || '', roles: user.roles };
-    await req.session.save();
+    await establishLoginSession(req, user);
 
-    res.status(201).json({ ok: true, user: req.session.user, redirect: '/appointment-settings' });
+    res.status(201).json({
+      ok: true,
+      user: req.session.user,
+      redirect: '/appointment-settings'
+    });
   } catch (e) {
     console.error('[signup/pro] error', e);
     res.status(500).json({ message: 'Signup failed' });
@@ -98,13 +125,21 @@ router.get('/api/me', (req, res) => {
 
 /* ----------------------------- LOGOUT ------------------------------ */
 router.post('/api/logout', (req, res) => {
-  try {
-    req.session?.destroy?.(() => {});
-    res.clearCookie('connect.sid');
+  req.session.destroy((err) => {
+    if (err) {
+      console.error('[logout] error', err);
+    }
+
+    res.clearCookie('connect.sid', {
+      path: '/',
+      domain: '.suiteseat.io',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+    });
+
     res.status(200).json({ ok: true });
-  } catch {
-    res.status(200).json({ ok: true });
-  }
+  });
 });
 
 /* Compatibility alias */
