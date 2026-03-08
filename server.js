@@ -4884,7 +4884,56 @@ async function runEmailAutomations({ eventKey, record, actorUserId }) {
     console.error("[runEmailAutomations] failed:", err);
   }
 }
+function formatDatePretty(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(`${String(dateStr).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return String(dateStr);
 
+  return d.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatTimePretty(timeStr) {
+  if (!timeStr) return "";
+
+  const s = String(timeStr).trim();
+  const parts = s.split(":");
+  if (parts.length < 2) return s;
+
+  let hour = Number(parts[0]);
+  const minute = Number(parts[1]);
+
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return s;
+
+  const suffix = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12;
+  if (hour === 0) hour = 12;
+
+  return `${hour}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+async function fetchRecordValuesByIds(ids = []) {
+  const cleanIds = (Array.isArray(ids) ? ids : [ids])
+    .map(x => {
+      if (!x) return null;
+      if (typeof x === "string") return x;
+      if (typeof x === "object") return x._id || x.id || null;
+      return null;
+    })
+    .filter(Boolean)
+    .filter(id => mongoose.isValidObjectId(String(id)));
+
+  if (!cleanIds.length) return [];
+
+  const rows = await Record.find({
+    _id: { $in: cleanIds },
+    deletedAt: null,
+  }).lean();
+
+  return rows;
+}
 async function buildEmailContext({ eventKey, record, actorUserId, audience }) {
   const rec = record?.toObject ? record.toObject() : record;
   const values = rec?.values || {};
@@ -4902,38 +4951,71 @@ async function buildEmailContext({ eventKey, record, actorUserId, audience }) {
   };
 
   // Appointment-created example
-  if (typeName === "appointment") {
-    const businessId =
-      values?.Business?._id ||
-      values?.businessId ||
-      null;
+if (typeName === "appointment") {
+  const businessId =
+    values?.Business?._id ||
+    values?.businessId ||
+    null;
 
-    const clientUserId =
-      values?.Client?._id ||
-      values?.clientId ||
-      null;
+  const clientUserId =
+    values?.Client?._id ||
+    values?.clientId ||
+    null;
 
-    let business = null;
-    if (businessId && mongoose.isValidObjectId(String(businessId))) {
-      const businessRec = await Record.findById(businessId).lean();
-      business = businessRec?.values || null;
-    }
+  const serviceRefs =
+    values?.["Service(s)"] ||
+    values?.Services ||
+    values?.Service ||
+    [];
 
-    let client = null;
-    if (clientUserId && mongoose.isValidObjectId(String(clientUserId))) {
-      client = await AuthUser.findById(clientUserId).lean();
-    }
-
-    ctx.appointment = values;
-    ctx.business = business;
-    ctx.client = client;
-
-    if (audience === "client" || audience === "clients") {
-      ctx.recipient = client ? { email: client.email } : null;
-    }
-
-    return ctx;
+  let business = null;
+  if (businessId && mongoose.isValidObjectId(String(businessId))) {
+    const businessRec = await Record.findById(businessId).lean();
+    business = businessRec?.values || null;
   }
+
+  let client = null;
+  if (clientUserId && mongoose.isValidObjectId(String(clientUserId))) {
+    client = await AuthUser.findById(clientUserId).lean();
+  }
+
+  // ✅ fetch service records
+  const serviceRows = await fetchRecordValuesByIds(serviceRefs);
+
+  const services = serviceRows.map(r => {
+    const v = r.values || {};
+    return {
+      _id: String(r._id),
+      name: v.Name || v.name || v["Service Name"] || v.serviceName || "",
+      price: v.Price ?? v.price ?? "",
+      duration:
+        v.DurationMin ??
+        v.durationMinutes ??
+        v["Duration (min)"] ??
+        v.Duration ??
+        v.duration ??
+        "",
+      description: v.Description || v.description || "",
+    };
+  });
+
+  ctx.appointment = values;
+  ctx.business = business;
+  ctx.client = client;
+  ctx.services = services;
+  ctx.serviceNames = services.map(s => s.name).filter(Boolean).join(", ");
+
+  ctx.appointmentDatePretty = formatDatePretty(values?.Date);
+  ctx.appointmentTimePretty = formatTimePretty(
+    values?.StartTime || values?.Time
+  );
+
+  if (audience === "client" || audience === "clients") {
+    ctx.recipient = client ? { email: client.email } : null;
+  }
+
+  return ctx;
+}
 
   return ctx;
 }
