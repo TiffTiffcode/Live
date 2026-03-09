@@ -2580,42 +2580,6 @@ app.get('/api/me/records', ensureAuthenticated, async (req, res) => {
 
 
 
-// CLIENT signup (customers)
-app.post("/signup/pro", async (req, res) => {
-  try {
-    const { firstName, lastName, email, password, phone } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ message: "Missing email/password" });
-    }
-
-    const emailNorm = String(email).toLowerCase().trim();
-
-    const existing = await AuthUser.findOne({ email: emailNorm });
-    if (existing) return res.status(409).json({ message: "Email already in use" });
-
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    const user = await AuthUser.create({
-      firstName: firstName || "",
-      lastName: lastName || "",
-      email: emailNorm,
-      phone: phone || "",
-      passwordHash,
-      roles: ["pro"],
-    });
-
-    await establishLoginSession(req, user);
-
-    return res.status(201).json({
-      ok: true,
-      user: req.session.user,
-      redirect: "/appointment-settings",
-    });
-  } catch (e) {
-    console.error("[signup pro] failed:", e);
-    return res.status(500).json({ message: "Signup failed" });
-  }
-});
 
 
 // PRO signup (service providers)
@@ -2642,16 +2606,7 @@ app.post("/signup/pro", async (req, res) => {
       roles: ["pro"],
     });
 
-    // ✅ same session shape as client
-    req.session.userId = String(user._id);
-    req.session.roles = user.roles || ["pro"];
-    req.session.user = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      roles: req.session.roles,
-    };
+    await establishLoginSession(req, user);
 
     return res.status(201).json({
       ok: true,
@@ -2663,7 +2618,6 @@ app.post("/signup/pro", async (req, res) => {
     return res.status(500).json({ message: "Signup failed" });
   }
 });
-
 // POST /api/guest-signup
 app.post("/api/guest-signup", async (req, res) => {
   try {
@@ -2690,7 +2644,28 @@ app.post("/api/guest-signup", async (req, res) => {
     return res.status(500).json({ message: "Guest signup failed" });
   }
 });
+function establishLoginSession(req, user) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) return reject(err);
 
+      req.session.userId = String(user._id);
+      req.session.roles = Array.isArray(user.roles) ? user.roles : [];
+      req.session.user = {
+        _id: String(user._id),
+        email: user.email || "",
+        firstName: user.firstName || "",
+        lastName: user.lastName || "",
+        roles: req.session.roles,
+      };
+
+      req.session.save((saveErr) => {
+        if (saveErr) return reject(saveErr);
+        resolve();
+      });
+    });
+  });
+}
 // ✅ Debug + compatibility aliases for booking page login (ADD ONLY)
 app.post("/auth/login", (req, res, next) => {
   // if anything calls /auth/login, reuse /api/login
@@ -2720,50 +2695,24 @@ app.get("/api/check-login", (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
-  console.log("[login] incoming", {
-    email: req.body?.email,
-    hasPassword: !!req.body?.password,
-    origin: req.headers.origin,
-    cookieIn: req.headers.cookie || null,
-  });
+  try {
+    const { email, password } = req.body || {};
+    const e = String(email).toLowerCase().trim();
 
-  const { email, password } = req.body || {};
-  const e = String(email).toLowerCase().trim();
+    const user = await AuthUser.findOne({ email: e });
+    if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
-  const user = await AuthUser.findOne({ email: e });
-  console.log("[login] foundUser:", !!user, "emailNorm:", e);
+    const ok = await bcrypt.compare(String(password || ""), user.passwordHash);
+    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
-  if (!user) return res.status(401).json({ message: "Invalid credentials" });
+    await establishLoginSession(req, user);
 
-  const ok = await bcrypt.compare(String(password || ""), user.passwordHash);
-  console.log("[login] passwordMatch:", ok);
-
-  if (!ok) return res.status(401).json({ message: "Invalid credentials" });
-
-  req.session.regenerate(async (err) => {
-    if (err) return res.status(500).json({ message: "Session error" });
-
-    req.session.userId = String(user._id);
-    req.session.roles  = Array.isArray(user.roles) ? user.roles : [];
-    req.session.user   = {
-      _id: String(user._id),
-      email: user.email,
-      firstName: user.firstName || "",
-      lastName: user.lastName || "",
-    };
-
-    await req.session.save();
-
-    console.log("[login] session set", {
-      sessionID: req.sessionID,
-      userId: req.session.userId,
-      roles: req.session.roles,
-    });
-
-    res.json({ ok: true, user: req.session.user });
-  });
+    return res.json({ ok: true, user: req.session.user });
+  } catch (e) {
+    console.error("[login] failed:", e);
+    return res.status(500).json({ message: "Login failed" });
+  }
 });
-
 
 
 // --- DEV ONLY: turn on admin/pro in the session ---
