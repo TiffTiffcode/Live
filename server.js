@@ -4586,8 +4586,193 @@ const sent = await stripe.invoices.sendInvoice(finalized.id);
 });
 
 
+app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
+  try {
+    const userId = String(req.session.userId || "");
+    const { paymentIntentId } = req.body || {};
+
+    if (!paymentIntentId) {
+      return res.status(400).json({ error: "missing_paymentIntentId" });
+    }
+
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (!pi || pi.status !== "succeeded") {
+      return res.status(400).json({ error: "payment_not_succeeded" });
+    }
+
+    const buyer = await AuthUser.findById(userId).lean();
+    if (!buyer) {
+      return res.status(404).json({ error: "buyer_not_found" });
+    }
+
+    const checkout = await Record.findOne({
+      deletedAt: null,
+      dataType: "Checkout",
+      $or: [
+        { createdBy: userId },
+        { "values.Buyer User Id": userId },
+        { "values.Customer": userId },
+      ],
+    }).lean();
+
+    if (!checkout) {
+      return res.status(404).json({ error: "checkout_not_found" });
+    }
+
+    const checkoutId = String(checkout._id);
+
+    const checkoutItems = await Record.find({
+      deletedAt: null,
+      dataType: "Checkout Item",
+      $or: [
+        { "values.Checkout._id": checkoutId },
+        { "values.Checkout.id": checkoutId },
+        { "values.Checkout": checkoutId },
+      ],
+    }).lean();
+
+    if (!checkoutItems.length) {
+      return res.status(400).json({ error: "checkout_has_no_items" });
+    }
+
+    const subtotal = checkoutItems.reduce((sum, item) => {
+      const v = item.values || {};
+      return sum + Number(v["Total Amount"] || 0);
+    }, 0);
+
+    const total = subtotal;
+    const orderNumber = `ORD-${Date.now()}`;
+
+    const firstItem = checkoutItems[0]?.values || {};
+    const firstCourseId = String(
+      firstItem?.Course?._id ||
+      firstItem?.Course?.id ||
+      firstItem?.["Reference Id"] ||
+      ""
+    );
+
+    let firstCourse = null;
+    if (firstCourseId) {
+      firstCourse = await Record.findById(firstCourseId).lean().catch(() => null);
+    }
+
+    const courseValues = firstCourse?.values || {};
+    const sellerUserId = String(
+      firstCourse?.createdBy ||
+      courseValues?.["Created By Id"] ||
+      courseValues?.["Seller User Id"] ||
+      courseValues?.["Created By"]?._id ||
+      ""
+    );
+
+    const orderDataTypeId = await getDataTypeIdByName("Order");
+    if (!orderDataTypeId) {
+      return res.status(400).json({ error: "missing_order_datatype" });
+    }
+
+    const createdOrder = await Record.create({
+      dataType: "Order",
+      dataTypeId: orderDataTypeId,
+      createdBy: userId,
+      values: {
+        "Created At": new Date(),
+        "Purchased Date": new Date(),
+        "Order Number": orderNumber,
+        "Buyer User Id": userId,
+        "Buyer Email": buyer.email || "",
+        "Buyer First Name": buyer.firstName || "",
+        "Buyer Last Name": buyer.lastName || "",
+        "Subtotal": subtotal,
+        "Total": total,
+        "Currency": String(pi.currency || "usd").toUpperCase(),
+        "Payment Intent Id": paymentIntentId,
+        "Payment Status": pi.status,
+        "Status": "Paid",
+        "Checkout Id": { _id: checkoutId },
+        "Customer": { _id: userId },
+        "Created by": { _id: userId },
+        "Seller User Id": sellerUserId || "",
+        "Course": firstCourseId ? { _id: firstCourseId } : null,
+        "Product Name": firstItem["Label"] || firstItem["Title"] || "",
+        "Price": Number(firstItem["Unit Amount"] || 0),
+        "Sale Price": Number(firstItem["Unit Amount"] || 0),
+        "Thumbnail": courseValues["Thumbnail Image"] || null,
+        "Metadata": JSON.stringify({
+          checkoutItemCount: checkoutItems.length,
+          stripePaymentIntentId: paymentIntentId,
+        }),
+      },
+    });
+
+    const orderId = String(createdOrder._id);
+
+    const checkoutItemRefs = [];
+
+    for (const item of checkoutItems) {
+      const itemId = String(item._id);
+      const v = item.values || {};
+      const refId = String(v["Reference Id"] || "");
+      const kind = String(v["Kind"] || v["Product Type"] || "course").toLowerCase();
+
+      const patch = {
+        "values.Order Id": orderId,
+        "values.Product Type": kind,
+        "values.Reference Type": kind,
+      };
+
+      if (kind === "course" && refId) {
+        patch["values.Course"] = { _id: refId };
+      }
+
+      await Record.findByIdAndUpdate(itemId, { $set: patch });
+      checkoutItemRefs.push({ _id: itemId });
+    }
 
 
+
+    await Record.findByIdAndUpdate(orderId, {
+  $set: {
+    "values.Checkout Item(s)": checkoutItemRefs,
+  },
+});
+
+await Record.findByIdAndUpdate(checkoutId, {
+  $set: {
+    "values.Status": "Completed",
+    "values.Payment Status": "Paid",
+    "values.Order Id": orderId,
+    "values.Completed At": new Date(),
+  },
+});
+
+// ✅ reload the final order so the email automation gets the updated values
+const finalOrder = await Record.findById(orderId).lean();
+
+await runEmailAutomations({
+  eventKey: "Order Placed",
+  record: finalOrder,
+  actorUserId: userId,
+});
+
+return res.json({
+  items: [
+    {
+      _id: orderId,
+      orderNumber,
+      total,
+      checkoutItems: checkoutItemRefs,
+    },
+  ],
+});
+  
+  } catch (err) {
+    console.error("[/api/checkout/confirm] failed:", err);
+    return res.status(500).json({
+      error: "checkout_confirm_failed",
+      message: err.message || "Unknown error",
+    });
+  }
+});
 
 
 
@@ -4886,7 +5071,37 @@ async function buildEmailContext({ eventKey, record, actorUserId, audience }) {
     record: values,
     recipient: null,
   };
+//Order  Created 
+if (typeName === "order") {
+  const customerId =
+    values?.Customer?._id ||
+    values?.["Buyer User Id"] ||
+    null;
 
+  let customer = null;
+  if (customerId && mongoose.isValidObjectId(String(customerId))) {
+    customer = await AuthUser.findById(customerId).lean();
+  }
+
+  ctx.order = values;
+  ctx.customer = customer;
+
+  ctx.orderNumber = values?.["Order Number"] || "";
+  ctx.productName = values?.["Product Name"] || "";
+  ctx.price = values?.["Price"] || values?.["Sale Price"] || "";
+  ctx.purchaseDate = values?.["Purchased Date"] || "";
+  ctx.buyerFirstName = values?.["Buyer First Name"] || customer?.firstName || "";
+  ctx.buyerLastName = values?.["Buyer Last Name"] || customer?.lastName || "";
+  ctx.buyerEmail = values?.["Buyer Email"] || customer?.email || "";
+
+  if (audience === "customers" || audience === "customer") {
+    ctx.recipient = {
+      email: values?.["Buyer Email"] || customer?.email || "",
+    };
+  }
+
+  return ctx;
+}
   // Appointment-created example
 if (typeName === "appointment") {
   const businessId =
