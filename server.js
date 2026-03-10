@@ -17,6 +17,9 @@ const webhookSecret = IS_PROD
 
 const path = require("path");
 
+const APP_URL = IS_PROD
+  ? "https://suiteseat.io"
+  : "http://localhost:8400"; 
 
 const express = require('express');
 const app = express();  
@@ -5075,6 +5078,7 @@ async function buildEmailContext({ eventKey, record, actorUserId, audience }) {
 if (typeName === "order") {
   const customerId =
     values?.Customer?._id ||
+    values?.Customer?.id ||
     values?.["Buyer User Id"] ||
     null;
 
@@ -5083,16 +5087,53 @@ if (typeName === "order") {
     customer = await AuthUser.findById(customerId).lean();
   }
 
+  const sellerUserId = values?.["Seller User Id"] || null;
+
+  let seller = null;
+  if (sellerUserId && mongoose.isValidObjectId(String(sellerUserId))) {
+    seller = await AuthUser.findById(sellerUserId).lean();
+  }
+
+  const courseId =
+    values?.Course?._id ||
+    values?.Course?.id ||
+    null;
+
+  let course = null;
+  if (courseId && mongoose.isValidObjectId(String(courseId))) {
+    course = await Record.findById(courseId).lean();
+  }
+
+  const courseValues = course?.values || {};
+
+  const courseSlug =
+    courseValues?.slug ||
+    courseValues?.courseSlug ||
+    courseValues?.["Course Slug"] ||
+    "";
+
   ctx.order = values;
   ctx.customer = customer;
+  ctx.seller = seller;
+  ctx.course = courseValues;
 
   ctx.orderNumber = values?.["Order Number"] || "";
   ctx.productName = values?.["Product Name"] || "";
   ctx.price = values?.["Price"] || values?.["Sale Price"] || "";
   ctx.purchaseDate = values?.["Purchased Date"] || "";
+
   ctx.buyerFirstName = values?.["Buyer First Name"] || customer?.firstName || "";
   ctx.buyerLastName = values?.["Buyer Last Name"] || customer?.lastName || "";
   ctx.buyerEmail = values?.["Buyer Email"] || customer?.email || "";
+
+  ctx.sellerName =
+    seller?.firstName ||
+    seller?.name ||
+    "the seller";
+
+  ctx.sellerLink = courseSlug
+    ? `${APP_URL}/${encodeURIComponent(courseSlug)}`
+    : APP_URL;
 
   if (audience === "customers" || audience === "customer") {
     ctx.recipient = {
