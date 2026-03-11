@@ -4117,10 +4117,10 @@ app.post("/api/checkout/items/add-course", requireLogin, async (req, res) => {
 
     const subtotalCents = allItems.reduce((sum, r) => sum + Number(r.values?.["Total Amount"] || 0), 0);
 
-    //Platform Fee change to 233
+    //Platform Fee change to 233  const platformFeeCents = 0.05; // $2.33
     // platform fee example: 5% (change later)
-    const platformFeeCents = 0.05; // $2.33
-    const totalCents = subtotalCents + platformFeeCents;
+const platformFeeCents = subtotalCents > 0 ? Math.round(subtotalCents * 0.05) : 0;
+const totalCents = subtotalCents + platformFeeCents;
 
     await Record.updateOne(
       { _id: checkout._id },
@@ -4213,8 +4213,8 @@ app.delete("/api/checkout/items/:id", requireLogin, async (req, res) => {
     }).lean();
 
     const subtotalCents = remaining.reduce((sum, r) => sum + Number(r.values?.["Total Amount"] || 0), 0);
-    const platformFeeCents = Math.round(subtotalCents * 0.05);
-    const totalCents = subtotalCents + platformFeeCents;
+ const platformFeeCents = subtotalCents > 0 ? Math.round(subtotalCents * 0.05) : 0;
+const totalCents = subtotalCents + platformFeeCents;
 
     await Record.updateOne(
       { _id: checkoutId, dataTypeId: checkoutDT._id, deletedAt: null },
@@ -4644,13 +4644,14 @@ if (!isFreeCheckout) {
       return res.status(400).json({ error: "checkout_has_no_items" });
     }
 
-    const subtotal = checkoutItems.reduce((sum, item) => {
-      const v = item.values || {};
-      return sum + Number(v["Total Amount"] || 0);
-    }, 0);
+const subtotal = checkoutItems.reduce((sum, item) => {
+  const v = item.values || {};
+  return sum + Number(v["Total Amount"] || 0);
+}, 0);
 
-    const total = subtotal;
-    const orderNumber = `ORD-${Date.now()}`;
+const checkoutValues = checkout.values || {};
+const total = Number(checkoutValues["Total Amount"] || subtotal);
+const orderNumber = `ORD-${Date.now()}`;
 
     const firstItem = checkoutItems[0]?.values || {};
     const firstCourseId = String(
@@ -4755,7 +4756,7 @@ if (!isFreeCheckout) {
 await Record.findByIdAndUpdate(checkoutId, {
   $set: {
     "values.Status": "Completed",
-    "values.Payment Status": "Paid",
+    "values.Payment Status": isFreeCheckout ? "free" : "Paid",
     "values.Order Id": orderId,
     "values.Completed At": new Date(),
   },
