@@ -3927,21 +3927,21 @@ app.post("/api/checkout/:id/create-payment-intent", requireLogin, async (req, re
     if (!totalCents || totalCents < 50) return res.status(400).json({ error: "invalid_total" });
     if (!destination) return res.status(400).json({ error: "missing_payee_stripe" });
 
-    const intent = await stripe.paymentIntents.create({
-      amount: totalCents,
-      currency,
-      automatic_payment_methods: { enabled: true },
+const intent = await stripe.paymentIntents.create({
+  amount: totalCents,
+  currency,
+  automatic_payment_methods: { enabled: true },
 
-      // ✅ send money to payee, keep platform fee
-      application_fee_amount: feeCents,
-      transfer_data: { destination },
+  application_fee_amount: feeCents,
+  transfer_data: { destination },
+  on_behalf_of: destination,
 
-      metadata: {
-        kind: "checkout",
-        checkoutId,
-        customerId,
-      },
-    });
+  metadata: {
+    kind: "checkout",
+    checkoutId,
+    customerId,
+  },
+});
 
     return res.json({
       clientSecret: intent.client_secret,
