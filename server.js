@@ -3770,22 +3770,22 @@ app.post("/api/rent/create-payment-intent", ensureAuthenticated, async (req, res
     // your fee (example: 3% + 30¢) — change this to what you want
     const fee = Math.max(30, Math.round(amountCents * 0.03));
 
-    const intent = await stripe.paymentIntents.create({
-      amount: amountCents,
-      currency,
-      automatic_payment_methods: { enabled: true },
+const intent = await stripe.paymentIntents.create({
+  amount: totalCents,
+  currency,
+  automatic_payment_methods: { enabled: true },
 
-      // ✅ Route money to owner + take platform fee
-      application_fee_amount: fee,
-      transfer_data: { destination },
+  application_fee_amount: feeCents,
+  transfer_data: { destination },
+  on_behalf_of: destination,
 
-      metadata: {
-        kind: "suite_rent",
-        rentId: rentId ? String(rentId) : "",
-        ownerUserId: String(ownerUserId),
-        payerUserId: payerId,
-      },
-    });
+  metadata: {
+    kind: "checkout",
+    checkoutId,
+    customerId,
+    destinationAccountId: destination,
+  },
+});
 
     // Return clientSecret to the frontend
     return res.json({
@@ -4117,8 +4117,9 @@ app.post("/api/checkout/items/add-course", requireLogin, async (req, res) => {
 
     const subtotalCents = allItems.reduce((sum, r) => sum + Number(r.values?.["Total Amount"] || 0), 0);
 
+    //Platform Fee change to 233
     // platform fee example: 5% (change later)
-    const platformFeeCents = Math.round(subtotalCents * 0.05);
+    const platformFeeCents = 0.05; // $2.33
     const totalCents = subtotalCents + platformFeeCents;
 
     await Record.updateOne(
