@@ -4792,7 +4792,9 @@ return res.json({
 });
 
 
-
+app.get("/api/checkout-confirm-test", (req, res) => {
+  res.json({ ok: true, message: "checkout confirm route file is live" });
+});
 
 
 
