@@ -4669,6 +4669,12 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
       ""
     );
 
+    const courseSlug = String(
+  courseValues?.slug ||
+  courseValues?.courseSlug ||
+  courseValues?.["Course Slug"] ||
+  ""
+).trim();
     const orderDataTypeId = await getDataTypeIdByName("Order");
     if (!orderDataTypeId) {
       return res.status(400).json({ error: "missing_order_datatype" });
@@ -4697,6 +4703,7 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
         "Created by": { _id: userId },
         "Seller User Id": sellerUserId || "",
         "Course": firstCourseId ? { _id: firstCourseId } : null,
+        "Course Slug": courseSlug,
         "Product Name": firstItem["Label"] || firstItem["Title"] || "",
         "Price": Number(firstItem["Unit Amount"] || 0),
         "Sale Price": Number(firstItem["Unit Amount"] || 0),
