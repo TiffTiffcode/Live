@@ -4593,16 +4593,21 @@ const sent = await stripe.invoices.sendInvoice(finalized.id);
 app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
   try {
     const userId = String(req.session.userId || "");
-    const { paymentIntentId } = req.body || {};
+const { paymentIntentId, freeCheckout } = req.body || {};
 
-    if (!paymentIntentId) {
-      return res.status(400).json({ error: "missing_paymentIntentId" });
-    }
+let pi = null;
+const isFreeCheckout = freeCheckout === true || paymentIntentId === "FREE_ORDER";
 
-    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-    if (!pi || pi.status !== "succeeded") {
-      return res.status(400).json({ error: "payment_not_succeeded" });
-    }
+if (!isFreeCheckout) {
+  if (!paymentIntentId) {
+    return res.status(400).json({ error: "missing_paymentIntentId" });
+  }
+
+  pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+  if (!pi || pi.status !== "succeeded") {
+    return res.status(400).json({ error: "payment_not_succeeded" });
+  }
+}
 
     const buyer = await AuthUser.findById(userId).lean();
     if (!buyer) {
@@ -4694,9 +4699,9 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
         "Buyer Last Name": buyer.lastName || "",
         "Subtotal": subtotal,
         "Total": total,
-        "Currency": String(pi.currency || "usd").toUpperCase(),
-        "Payment Intent Id": paymentIntentId,
-        "Payment Status": pi.status,
+        "Currency": String(isFreeCheckout ? "usd" : (pi.currency || "usd")).toUpperCase(),
+        "Payment Intent Id": isFreeCheckout ? "FREE_ORDER" : paymentIntentId,
+        "Payment Status": isFreeCheckout ? "free" : pi.status,
         "Status": "Paid",
         "Checkout Id": { _id: checkoutId },
         "Customer": { _id: userId },
