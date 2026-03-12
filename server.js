@@ -4722,10 +4722,18 @@ const checkoutId = String(checkout._id);
       ""
     ).trim();
 
-    const orderDataTypeId = await getDataTypeIdByName("Order");
-    if (!orderDataTypeId) {
-      return res.status(400).json({ error: "missing_order_datatype" });
-    }
+const orderDataTypeId = await getDataTypeIdByName("Order");
+if (!orderDataTypeId) {
+  return res.status(400).json({ error: "missing_order_datatype" });
+}
+
+console.log("[checkout confirm] about to create Order", {
+  userId,
+  checkoutId,
+  subtotal,
+  total,
+  firstCourseId,
+});
 
     const createdOrder = await Record.create({
       dataType: "Order",
@@ -4763,7 +4771,7 @@ const checkoutId = String(checkout._id);
         }),
       },
     });
-
+console.log("[checkout confirm] createdOrder:", String(createdOrder._id));
     const orderId = String(createdOrder._id);
 
     const checkoutItemRefs = [];
@@ -4776,67 +4784,83 @@ const checkoutId = String(checkout._id);
         v["Kind"] || v["Product Type"] || "course"
       ).toLowerCase();
 
-      const patch = {
-        "values.Order Id": orderId,
-        "values.Product Type": kind,
-        "values.Reference Type": kind,
-      };
+const patch = {
+  "values.Order Id": orderId,
+  "values.Product Type": kind,
+  "values.Reference Type": kind,
+};
 
-      if (kind === "course" && refId) {
-        patch["values.Course"] = { _id: refId };
+if (kind === "course" && refId) {
+  console.log("[checkout confirm] processing course item", {
+    userId,
+    refId,
+    itemId,
+  });
 
-        const courseStudentDataTypeId = await getDataTypeIdByName("Course Student");
+  patch["values.Course"] = { _id: refId };
 
-        if (courseStudentDataTypeId) {
-          const existingCourseStudent = await Record.findOne({
-            deletedAt: null,
-            dataType: "Course Student",
-            "values.User._id": userId,
-            "values.Courses._id": refId,
-          }).lean();
+  const courseStudentDataTypeId = await getDataTypeIdByName("Course Student");
+  console.log("[checkout confirm] courseStudentDataTypeId:", courseStudentDataTypeId);
 
-          if (!existingCourseStudent) {
-            await Record.create({
-              dataType: "Course Student",
-              dataTypeId: courseStudentDataTypeId,
-              createdBy: userId,
-              values: {
-                "User": { _id: userId },
-                "Courses": { _id: refId },
-              },
-            });
-          }
-        }
+  if (courseStudentDataTypeId) {
+    const existingCourseStudent = await Record.findOne({
+      deletedAt: null,
+      dataType: "Course Student",
+      "values.User._id": userId,
+      "values.Courses._id": refId,
+    }).lean();
 
-        const courseRecord = await Record.findById(refId).lean().catch(() => null);
+    console.log("[checkout confirm] existingCourseStudent found:", !!existingCourseStudent);
 
-        if (courseRecord) {
-          const currentStudents = Array.isArray(courseRecord.values?.["Students(s)"])
-            ? courseRecord.values["Students(s)"]
-            : [];
+    if (!existingCourseStudent) {
+      const createdCourseStudent = await Record.create({
+        dataType: "Course Student",
+        dataTypeId: courseStudentDataTypeId,
+        createdBy: userId,
+        values: {
+          "User": { _id: userId },
+          "Courses": { _id: refId },
+        },
+      });
 
-          const alreadyInCourse = currentStudents.some((studentRef) => {
-            const sid =
-              studentRef?._id ||
-              studentRef?.id ||
-              studentRef?.recordId ||
-              studentRef?.refId ||
-              studentRef;
-            return String(sid) === String(userId);
-          });
+      console.log("[checkout confirm] created Course Student:", String(createdCourseStudent._id));
+    }
+  }
 
-          if (!alreadyInCourse) {
-            await Record.findByIdAndUpdate(refId, {
-              $set: {
-                "values.Students(s)": [
-                  ...currentStudents,
-                  { _id: userId },
-                ],
-              },
-            });
-          }
-        }
-      }
+  const courseRecord = await Record.findById(refId).lean().catch(() => null);
+  console.log("[checkout confirm] courseRecord found:", !!courseRecord);
+
+  if (courseRecord) {
+    const currentStudents = Array.isArray(courseRecord.values?.["Students(s)"])
+      ? courseRecord.values["Students(s)"]
+      : [];
+
+    const alreadyInCourse = currentStudents.some((studentRef) => {
+      const sid =
+        studentRef?._id ||
+        studentRef?.id ||
+        studentRef?.recordId ||
+        studentRef?.refId ||
+        studentRef;
+      return String(sid) === String(userId);
+    });
+
+    console.log("[checkout confirm] alreadyInCourse:", alreadyInCourse);
+
+    if (!alreadyInCourse) {
+      await Record.findByIdAndUpdate(refId, {
+        $set: {
+          "values.Students(s)": [
+            ...currentStudents,
+            { _id: userId },
+          ],
+        },
+      });
+
+      console.log("[checkout confirm] added user to course Students(s)");
+    }
+  }
+}
 
       await Record.findByIdAndUpdate(itemId, { $set: patch });
       checkoutItemRefs.push({ _id: itemId });
