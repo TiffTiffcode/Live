@@ -4628,26 +4628,28 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
     }
 
 let checkout = null;
+const checkoutDT = await DataType.findOne({ nameCanonical: "checkout" }).lean();
 
-if (bodyCheckoutId) {
+if (bodyCheckoutId && checkoutDT?._id) {
   checkout = await Record.findOne({
     _id: bodyCheckoutId,
     deletedAt: null,
+    dataTypeId: checkoutDT._id,
   }).lean();
 }
 
-if (!checkout && !isFreeCheckout && paymentIntentId) {
+if (!checkout && !isFreeCheckout && paymentIntentId && checkoutDT?._id) {
   checkout = await Record.findOne({
     deletedAt: null,
-    dataType: "Checkout",
+    dataTypeId: checkoutDT._id,
     "values.Stripe Payment Intent Id": paymentIntentId,
   }).lean();
 }
 
-if (!checkout) {
+if (!checkout && checkoutDT?._id) {
   checkout = await Record.findOne({
     deletedAt: null,
-    dataType: "Checkout",
+    dataTypeId: checkoutDT._id,
     $or: [
       { createdBy: userId },
       { "values.Buyer User Id": userId },
