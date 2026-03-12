@@ -4592,6 +4592,9 @@ const sent = await stripe.invoices.sendInvoice(finalized.id);
 
 app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
   try {
+        console.log("[checkout confirm] body:", req.body);
+    console.log("[checkout confirm] session userId:", req.session?.userId);
+
     const userId = String(req.session.userId || "");
     const { paymentIntentId, freeCheckout } = req.body || {};
 
@@ -4605,12 +4608,14 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
       }
 
       pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+      console.log("[checkout confirm] payment intent status:", pi?.status);
       if (!pi || pi.status !== "succeeded") {
         return res.status(400).json({ error: "payment_not_succeeded" });
       }
     }
 
     const buyer = await AuthUser.findById(userId).lean();
+    console.log("[checkout confirm] buyer found:", !!buyer);
     if (!buyer) {
       return res.status(404).json({ error: "buyer_not_found" });
     }
