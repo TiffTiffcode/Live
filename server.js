@@ -4854,7 +4854,13 @@ app.get("/api/checkout-confirm-test", (req, res) => {
   res.json({ ok: true, message: "checkout confirm route file is live" });
 });
 
-
+app.post("/api/checkout/confirm-test-post", (req, res) => {
+  res.json({
+    ok: true,
+    method: "POST",
+    message: "confirm POST route is live",
+  });
+});
 
 
 
