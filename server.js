@@ -4633,7 +4633,6 @@ if (bodyCheckoutId) {
   checkout = await Record.findOne({
     _id: bodyCheckoutId,
     deletedAt: null,
-    dataType: "Checkout",
   }).lean();
 }
 
