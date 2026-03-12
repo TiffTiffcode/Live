@@ -4671,16 +4671,22 @@ if (!checkout) {
 
 const checkoutId = String(checkout._id);
 
-    const checkoutItems = await Record.find({
+const checkoutItemDT = await DataType.findOne({ nameCanonical: "checkout item" }).lean();
+
+const checkoutItems = checkoutItemDT?._id
+  ? await Record.find({
       deletedAt: null,
-      dataType: "Checkout Item",
+      dataTypeId: checkoutItemDT._id,
       $or: [
         { "values.Checkout._id": checkoutId },
         { "values.Checkout.id": checkoutId },
         { "values.Checkout": checkoutId },
       ],
-    }).lean();
+    }).lean()
+  : [];
 
+  console.log("[checkout confirm] checkoutItems found:", checkoutItems.length);
+console.log("[checkout confirm] checkoutId for items:", checkoutId);
     if (!checkoutItems.length) {
       return res.status(400).json({ error: "checkout_has_no_items" });
     }
