@@ -4593,22 +4593,21 @@ const sent = await stripe.invoices.sendInvoice(finalized.id);
 app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
   try {
     const userId = String(req.session.userId || "");
-    const { paymentIntentId, freeCheckout } = req.body || {};
+const { paymentIntentId, freeCheckout } = req.body || {};
 
-    let pi = null;
-    const isFreeCheckout =
-      freeCheckout === true || paymentIntentId === "FREE_ORDER";
+let pi = null;
+const isFreeCheckout = freeCheckout === true || paymentIntentId === "FREE_ORDER";
 
-    if (!isFreeCheckout) {
-      if (!paymentIntentId) {
-        return res.status(400).json({ error: "missing_paymentIntentId" });
-      }
+if (!isFreeCheckout) {
+  if (!paymentIntentId) {
+    return res.status(400).json({ error: "missing_paymentIntentId" });
+  }
 
-      pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-      if (!pi || pi.status !== "succeeded") {
-        return res.status(400).json({ error: "payment_not_succeeded" });
-      }
-    }
+  pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+  if (!pi || pi.status !== "succeeded") {
+    return res.status(400).json({ error: "payment_not_succeeded" });
+  }
+}
 
     const buyer = await AuthUser.findById(userId).lean();
     if (!buyer) {
@@ -4645,14 +4644,14 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
       return res.status(400).json({ error: "checkout_has_no_items" });
     }
 
-    const subtotal = checkoutItems.reduce((sum, item) => {
-      const v = item.values || {};
-      return sum + Number(v["Total Amount"] || 0);
-    }, 0);
+const subtotal = checkoutItems.reduce((sum, item) => {
+  const v = item.values || {};
+  return sum + Number(v["Total Amount"] || 0);
+}, 0);
 
-    const checkoutValues = checkout.values || {};
-    const total = Number(checkoutValues["Total Amount"] || subtotal);
-    const orderNumber = `ORD-${Date.now()}`;
+const checkoutValues = checkout.values || {};
+const total = Number(checkoutValues["Total Amount"] || subtotal);
+const orderNumber = `ORD-${Date.now()}`;
 
     const firstItem = checkoutItems[0]?.values || {};
     const firstCourseId = String(
@@ -4677,12 +4676,11 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
     );
 
     const courseSlug = String(
-      courseValues?.slug ||
-      courseValues?.courseSlug ||
-      courseValues?.["Course Slug"] ||
-      ""
-    ).trim();
-
+  courseValues?.slug ||
+  courseValues?.courseSlug ||
+  courseValues?.["Course Slug"] ||
+  ""
+).trim();
     const orderDataTypeId = await getDataTypeIdByName("Order");
     if (!orderDataTypeId) {
       return res.status(400).json({ error: "missing_order_datatype" });
@@ -4702,9 +4700,7 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
         "Buyer Last Name": buyer.lastName || "",
         "Subtotal": subtotal,
         "Total": total,
-        "Currency": String(
-          isFreeCheckout ? "usd" : (pi.currency || "usd")
-        ).toUpperCase(),
+        "Currency": String(isFreeCheckout ? "usd" : (pi.currency || "usd")).toUpperCase(),
         "Payment Intent Id": isFreeCheckout ? "FREE_ORDER" : paymentIntentId,
         "Payment Status": isFreeCheckout ? "free" : pi.status,
         "Status": "Paid",
@@ -4729,113 +4725,89 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
 
     const checkoutItemRefs = [];
 
-    for (const item of checkoutItems) {
-      const itemId = String(item._id);
-      const v = item.values || {};
-      const refId = String(v["Reference Id"] || "");
-      const kind = String(
-        v["Kind"] || v["Product Type"] || "course"
-      ).toLowerCase();
+for (const item of checkoutItems) {
+  const itemId = String(item._id);
+  const v = item.values || {};
+  const refId = String(v["Reference Id"] || "");
+  const kind = String(v["Kind"] || v["Product Type"] || "course").toLowerCase();
 
-      const patch = {
-        "values.Order Id": orderId,
-        "values.Product Type": kind,
-        "values.Reference Type": kind,
-      };
+  const patch = {
+    "values.Order Id": orderId,
+    "values.Product Type": kind,
+    "values.Reference Type": kind,
+  };
 
-      if (kind === "course" && refId) {
-        patch["values.Course"] = { _id: refId };
+  if (kind === "course" && refId) {
+    patch["values.Course"] = { _id: refId };
 
-        const courseStudentDataTypeId = await getDataTypeIdByName("Course Student");
+    const enrollmentDataTypeId = await getDataTypeIdByName("Enrollment");
 
-        if (courseStudentDataTypeId) {
-          const existingCourseStudent = await Record.findOne({
-            deletedAt: null,
-            dataType: "Course Student",
-            "values.User._id": userId,
-            "values.Courses._id": refId,
-          }).lean();
+    if (enrollmentDataTypeId) {
+      const existingEnrollment = await Record.findOne({
+        deletedAt: null,
+        dataType: "Enrollment",
+        "values.Student User Id": userId,
+        "values.Course Id": refId,
+      }).lean();
 
-          if (!existingCourseStudent) {
-            await Record.create({
-              dataType: "Course Student",
-              dataTypeId: courseStudentDataTypeId,
-              createdBy: userId,
-              values: {
-                "User": { _id: userId },
-                "Courses": { _id: refId },
-              },
-            });
-          }
-        }
-
-        const courseRecord = await Record.findById(refId).lean().catch(() => null);
-
-        if (courseRecord) {
-          const currentStudents = Array.isArray(courseRecord.values?.["Students(s)"])
-            ? courseRecord.values["Students(s)"]
-            : [];
-
-          const alreadyInCourse = currentStudents.some((studentRef) => {
-            const sid =
-              studentRef?._id ||
-              studentRef?.id ||
-              studentRef?.recordId ||
-              studentRef?.refId ||
-              studentRef;
-            return String(sid) === String(userId);
-          });
-
-          if (!alreadyInCourse) {
-            await Record.findByIdAndUpdate(refId, {
-              $set: {
-                "values.Students(s)": [
-                  ...currentStudents,
-                  { _id: userId },
-                ],
-              },
-            });
-          }
-        }
+      if (!existingEnrollment) {
+        await Record.create({
+          dataType: "Enrollment",
+          dataTypeId: enrollmentDataTypeId,
+          createdBy: userId,
+          values: {
+            "Student User Id": userId,
+            "Course Id": refId,
+            "Order Id": orderId,
+            "Status": "active",
+            "Enrolled At": new Date(),
+          },
+        });
       }
-
-      await Record.findByIdAndUpdate(itemId, { $set: patch });
-      checkoutItemRefs.push({ _id: itemId });
     }
+  }
+
+  await Record.findByIdAndUpdate(itemId, { $set: patch });
+  checkoutItemRefs.push({ _id: itemId });
+}
+
+
 
     await Record.findByIdAndUpdate(orderId, {
-      $set: {
-        "values.Checkout Item(s)": checkoutItemRefs,
-      },
-    });
+  $set: {
+    "values.Checkout Item(s)": checkoutItemRefs,
+  },
+});
 
-    await Record.findByIdAndUpdate(checkoutId, {
-      $set: {
-        "values.Status": "Completed",
-        "values.Payment Status": isFreeCheckout ? "free" : "Paid",
-        "values.Order Id": orderId,
-        "values.Completed At": new Date(),
-      },
-    });
+await Record.findByIdAndUpdate(checkoutId, {
+  $set: {
+    "values.Status": "Completed",
+    "values.Payment Status": isFreeCheckout ? "free" : "Paid",
+    "values.Order Id": orderId,
+    "values.Completed At": new Date(),
+  },
+});
 
-    const finalOrder = await Record.findById(orderId).lean();
+// ✅ reload the final order so the email automation gets the updated values
+const finalOrder = await Record.findById(orderId).lean();
 
-    await runEmailAutomations({
-      eventKey: "Order Placed",
-      record: finalOrder,
-      actorUserId: userId,
-    });
+await runEmailAutomations({
+  eventKey: "Order Placed",
+  record: finalOrder,
+  actorUserId: userId,
+});
 
-    return res.json({
-      items: [
-        {
-          _id: orderId,
-          orderNumber,
-          total,
-          checkoutItems: checkoutItemRefs,
-        },
-      ],
-    });
+return res.json({
+  items: [
+    {
+      _id: orderId,
+      orderNumber,
+      total,
+      checkoutItems: checkoutItemRefs,
+    },
+  ],
+});
+  
   } catch (err) {
     console.error("[/api/checkout/confirm] failed:", err);
     return res.status(500).json({
@@ -4844,6 +4816,7 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
     });
   }
 });
+
 
 app.get("/api/checkout-confirm-test", (req, res) => {
   res.json({ ok: true, message: "checkout confirm route file is live" });
