@@ -4603,7 +4603,7 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
     console.log("[checkout confirm] session userId:", req.session?.userId);
 
     const userId = String(req.session.userId || "");
-    const { paymentIntentId, freeCheckout } = req.body || {};
+    const { paymentIntentId, freeCheckout, checkoutId: bodyCheckoutId } = req.body || {};
 
     let pi = null;
     const isFreeCheckout =
@@ -4629,7 +4629,15 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
 
 let checkout = null;
 
-if (!isFreeCheckout && paymentIntentId) {
+if (bodyCheckoutId) {
+  checkout = await Record.findOne({
+    _id: bodyCheckoutId,
+    deletedAt: null,
+    dataType: "Checkout",
+  }).lean();
+}
+
+if (!checkout && !isFreeCheckout && paymentIntentId) {
   checkout = await Record.findOne({
     deletedAt: null,
     dataType: "Checkout",
@@ -4653,13 +4661,14 @@ if (!checkout) {
 
 console.log("[checkout confirm] paymentIntentId:", paymentIntentId);
 console.log("[checkout confirm] isFreeCheckout:", isFreeCheckout);
+console.log("[checkout confirm] bodyCheckoutId:", bodyCheckoutId);
 console.log("[checkout confirm] checkout found:", checkout?._id || null);
 
 if (!checkout) {
   return res.status(404).json({ error: "checkout_not_found" });
 }
 
-    const checkoutId = String(checkout._id);
+const checkoutId = String(checkout._id);
 
     const checkoutItems = await Record.find({
       deletedAt: null,
@@ -4839,14 +4848,14 @@ if (!checkout) {
       },
     });
 
-    await Record.findByIdAndUpdate(checkoutId, {
-      $set: {
-        "values.Status": "Completed",
-        "values.Payment Status": isFreeCheckout ? "free" : "Paid",
-        "values.Order Id": orderId,
-        "values.Completed At": new Date(),
-      },
-    });
+await Record.findByIdAndUpdate(checkoutId, {
+  $set: {
+    "values.status": "completed",
+    "values.Payment Status": isFreeCheckout ? "free" : "Paid",
+    "values.Order Id": orderId,
+    "values.Completed At": new Date(),
+  },
+});
 
     const finalOrder = await Record.findById(orderId).lean();
 
