@@ -3931,11 +3931,9 @@ const intent = await stripe.paymentIntents.create({
   amount: totalCents,
   currency,
   automatic_payment_methods: { enabled: true },
-
   application_fee_amount: feeCents,
   transfer_data: { destination },
   on_behalf_of: destination,
-
   metadata: {
     kind: "checkout",
     checkoutId,
@@ -3943,10 +3941,19 @@ const intent = await stripe.paymentIntents.create({
   },
 });
 
-    return res.json({
-      clientSecret: intent.client_secret,
-      paymentIntentId: intent.id,
-    });
+await Record.updateOne(
+  { _id: checkoutId },
+  {
+    $set: {
+      "values.Stripe Payment Intent Id": intent.id,
+    }
+  }
+);
+
+return res.json({
+  clientSecret: intent.client_secret,
+  paymentIntentId: intent.id,
+});
 } catch (e) {
   const raw = e?.raw || e;
   console.error("[checkout/create-payment-intent] error:", raw);
@@ -4620,19 +4627,37 @@ app.post("/api/checkout/confirm", requireLogin, async (req, res) => {
       return res.status(404).json({ error: "buyer_not_found" });
     }
 
-    const checkout = await Record.findOne({
-      deletedAt: null,
-      dataType: "Checkout",
-      $or: [
-        { createdBy: userId },
-        { "values.Buyer User Id": userId },
-        { "values.Customer": userId },
-      ],
-    }).lean();
+let checkout = null;
 
-    if (!checkout) {
-      return res.status(404).json({ error: "checkout_not_found" });
-    }
+if (!isFreeCheckout && paymentIntentId) {
+  checkout = await Record.findOne({
+    deletedAt: null,
+    dataType: "Checkout",
+    "values.Stripe Payment Intent Id": paymentIntentId,
+  }).lean();
+}
+
+if (!checkout) {
+  checkout = await Record.findOne({
+    deletedAt: null,
+    dataType: "Checkout",
+    $or: [
+      { createdBy: userId },
+      { "values.Buyer User Id": userId },
+      { "values.Customer": userId },
+    ],
+  })
+    .sort({ _id: -1 })
+    .lean();
+}
+
+console.log("[checkout confirm] paymentIntentId:", paymentIntentId);
+console.log("[checkout confirm] isFreeCheckout:", isFreeCheckout);
+console.log("[checkout confirm] checkout found:", checkout?._id || null);
+
+if (!checkout) {
+  return res.status(404).json({ error: "checkout_not_found" });
+}
 
     const checkoutId = String(checkout._id);
 
