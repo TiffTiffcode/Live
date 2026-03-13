@@ -4888,37 +4888,34 @@ await Record.findByIdAndUpdate(checkoutId, {
   },
 });
 
-    const finalOrder = await Record.findById(orderId).lean();
+const finalOrder = await Record.findById(orderId).lean();
+
+console.log("[checkout confirm] finalOrder exists:", !!finalOrder);
+console.log("[checkout confirm] finalOrder buyer email:", finalOrder?.values?.["Buyer Email"] || "");
+console.log("[checkout confirm] about to run Order Placed email");
 
 try {
-  console.log("[checkout confirm] about to run email automation", {
-    eventKey: "Order Placed",
-    orderId,
-    userId,
-    buyerEmail: finalOrder?.values?.["Buyer Email"],
-  });
-
   await runEmailAutomations({
     eventKey: "Order Placed",
     record: finalOrder,
     actorUserId: userId,
   });
 
-  console.log("[checkout confirm] email automation completed");
+  console.log("[checkout confirm] Order Placed email automation finished");
 } catch (emailErr) {
-  console.error("[checkout confirm] email automation failed:", emailErr);
+  console.error("[checkout confirm] Order Placed email automation failed:", emailErr);
 }
 
-    return res.json({
-      items: [
-        {
-          _id: orderId,
-          orderNumber,
-          total,
-          checkoutItems: checkoutItemRefs,
-        },
-      ],
-    });
+return res.json({
+  items: [
+    {
+      _id: orderId,
+      orderNumber,
+      total,
+      checkoutItems: checkoutItemRefs,
+    },
+  ],
+});
   } catch (err) {
     console.error("[/api/checkout/confirm] failed:", err);
     return res.status(500).json({
