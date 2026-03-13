@@ -4895,12 +4895,12 @@ console.log("[checkout confirm] finalOrder buyer email:", finalOrder?.values?.["
 console.log("[checkout confirm] about to run Order Placed email");
 
 try {
-  await runEmailAutomations({
-    eventKey: "Order Placed",
-    record: finalOrder,
-    actorUserId: userId,
-  });
 
+  await runEmailAutomations({
+  eventKey: "order.created",
+  record: finalOrder,
+  actorUserId: userId,
+});
   console.log("[checkout confirm] Order Placed email automation finished");
 } catch (emailErr) {
   console.error("[checkout confirm] Order Placed email automation failed:", emailErr);
@@ -5067,7 +5067,19 @@ async function chargeRent(req, res) {
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
                                     //Email Automation
+console.log("[runEmailAutomations] START");
+console.log("[runEmailAutomations] eventKey:", eventKey);
+console.log("[runEmailAutomations] actorUserId:", actorUserId);
+console.log("[runEmailAutomations] record id:", record?._id || null);
+console.log("[runEmailAutomations] record values:", record?.values || {});
+
+                                    //Email Automation
 async function runEmailAutomations({ eventKey, record, actorUserId }) {
+    console.log("[runEmailAutomations] START");
+  console.log("[runEmailAutomations] eventKey:", eventKey);
+  console.log("[runEmailAutomations] actorUserId:", actorUserId);
+  console.log("[runEmailAutomations] record id:", record?._id || null);
+  console.log("[runEmailAutomations] record values:", record?.values || {});
   try {
     console.log("[email] runEmailAutomations eventKey:", eventKey);
 
@@ -5079,7 +5091,17 @@ async function runEmailAutomations({ eventKey, record, actorUserId }) {
       dataTypeId: emailDt._id,
       deletedAt: null,
     }).lean();
-
+  console.log("[runEmailAutomations] automations found:", automations?.length || 0);
+  console.log(
+    "[runEmailAutomations] automation list:",
+    (automations || []).map(a => ({
+      id: a._id,
+      name: a.values?.Name,
+      trigger: a.values?.Trigger,
+      audience: a.values?.Audience,
+      enabled: a.values?.Enabled,
+    }))
+  );
     console.log(
       "[email] all automations raw:",
       allAutomations.map(a => ({
@@ -5111,7 +5133,7 @@ async function runEmailAutomations({ eventKey, record, actorUserId }) {
     console.log("[email] matching automations:", automations.length);
 
     if (!automations.length) return;
-
+console.log("[runEmailAutomations] looking for eventKey:", eventKey);
     for (const a of automations) {
       try {
         const delayMin = Number(a.values?.SendDelayMinutes || 0);
