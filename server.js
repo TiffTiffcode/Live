@@ -5067,11 +5067,7 @@ async function chargeRent(req, res) {
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
                                     //Email Automation
-console.log("[runEmailAutomations] START");
-console.log("[runEmailAutomations] eventKey:", eventKey);
-console.log("[runEmailAutomations] actorUserId:", actorUserId);
-console.log("[runEmailAutomations] record id:", record?._id || null);
-console.log("[runEmailAutomations] record values:", record?.values || {});
+
 
                                     //Email Automation
 async function runEmailAutomations({ eventKey, record, actorUserId }) {
