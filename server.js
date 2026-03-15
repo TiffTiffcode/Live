@@ -136,12 +136,13 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   proxy: true,
-  store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }), // ✅ add this
+  store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }),
   cookie: {
     httpOnly: true,
     secure: IS_PROD,
     sameSite: IS_PROD ? "none" : "lax",
     domain: IS_PROD ? ".suiteseat.io" : undefined,
+    maxAge: 1000 * 60 * 60 * 24 * 7,
   },
 }));
 

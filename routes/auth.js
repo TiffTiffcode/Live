@@ -41,9 +41,16 @@ router.post('/api/login', async (req, res) => {
     const ok = await bcrypt.compare(String(password || ''), user.passwordHash);
     if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
 
-    await establishLoginSession(req, user);
+await establishLoginSession(req, user);
 
-    res.json({ ok: true, user: req.session.user });
+console.log('[login] session after establish:', {
+  sessionID: req.sessionID,
+  userId: req.session?.userId || null,
+  user: req.session?.user || null,
+  roles: req.session?.roles || [],
+});
+
+res.json({ ok: true, user: req.session.user });
   } catch (e) {
     console.error('[login] error', e);
     res.status(500).json({ message: 'Login failed' });
@@ -117,10 +124,22 @@ router.post('/signup/pro', async (req, res) => {
 
 /* ------------------------------ ME -------------------------------- */
 router.get('/api/me', (req, res) => {
+  console.log('[/api/me] session check:', {
+    sessionID: req.sessionID,
+    userId: req.session?.userId || null,
+    user: req.session?.user || null,
+    roles: req.session?.roles || [],
+    cookie: req.headers.cookie || null,
+  });
+
   const id = req.session?.userId || null;
   const u  = req.session?.user   || null;
-  if (!id || !u) return res.json({ ok: false, user: null });
-  res.json({ ok: true, user: u });
+
+  if (!id || !u) {
+    return res.json({ ok: false, user: null });
+  }
+
+  return res.json({ ok: true, user: u });
 });
 
 /* ----------------------------- LOGOUT ------------------------------ */
