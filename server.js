@@ -2718,7 +2718,27 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+app.patch("/api/me/pro-mode", requireLogin, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const { proMode } = req.body || {};
 
+    if (!["self", "builder"].includes(proMode)) {
+      return res.status(400).json({ ok: false, error: "Invalid proMode" });
+    }
+
+    const user = await AuthUser.findByIdAndUpdate(
+      userId,
+      { $set: { proMode } },
+      { new: true }
+    ).lean();
+
+    return res.json({ ok: true, user });
+  } catch (err) {
+    console.error("[api/me/pro-mode] error", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
 // --- DEV ONLY: turn on admin/pro in the session ---
 app.post('/dev/admin-on', (req, res) => {
   // use a stable fake ObjectId
