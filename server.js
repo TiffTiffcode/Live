@@ -613,14 +613,20 @@ app.post('/signup', async (req, res) => {
 app.post('/signup/pro', async (req, res) => {
   try {
     const { firstName, lastName, email, password, phone } = req.body || {};
-    if (!email || !password) return res.status(400).json({ message: 'Missing email/password' });
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Missing email/password' });
+    }
 
     const existing = await AuthUser.findOne({ email: email.toLowerCase() });
-    if (existing) return res.status(409).json({ message: 'Email already in use' });
+    if (existing) {
+      return res.status(409).json({ message: 'Email already in use' });
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
+
     const user = await AuthUser.create({
-      firstName, lastName,
+      firstName,
+      lastName,
       email: email.toLowerCase(),
       phone,
       passwordHash,
@@ -628,9 +634,19 @@ app.post('/signup/pro', async (req, res) => {
     });
 
     req.session.userId = String(user._id);
-    req.session.user = { _id: String(user._id), firstName, lastName, email: user.email, roles: user.roles };
+    req.session.user = {
+      _id: String(user._id),
+      firstName,
+      lastName,
+      email: user.email,
+      roles: user.roles
+    };
 
-    res.status(201).json({ user: req.session.user, redirect: '/appointment-settings' });
+    res.status(201).json({
+      ok: true,
+      user: req.session.user,
+      redirect: '/settings'
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
