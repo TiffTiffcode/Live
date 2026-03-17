@@ -19,6 +19,11 @@ const AuthUserSchema = new mongoose.Schema(
 
     roles: [{ type: String }], // we'll wire Option Sets later if you want
 
+    proMode: {
+  type: String,
+  enum: ["self", "builder", ""],
+  default: "",
+},
     phone: { type: String },
     address: { type: String },
     profilePhoto: { type: String },
