@@ -9,6 +9,7 @@ console.log("[boot] cloudinary env check", {
   NODE_ENV: process.env.NODE_ENV,
 });
 
+//Windows
 const IS_PROD = process.env.NODE_ENV === "production";
 // decide which webhook secret to use
 const webhookSecret = IS_PROD
