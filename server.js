@@ -2766,25 +2766,35 @@ app.get('/dev/admin-on', (req, res) => {
 
 
 // ME (session probe)
-app.get('/api/me', (req, res) => {
-  const id = req.session?.userId || null;
-  const u  = req.session?.user   || null;
+app.get('/api/me', async (req, res) => {
+  try {
+    const id = req.session?.userId || null;
 
-  if (!id || !u) {
-    return res.json({ ok: false, user: null });
+    if (!id) {
+      return res.json({ ok: false, user: null });
+    }
+
+    const dbUser = await AuthUser.findById(id).lean();
+    if (!dbUser) {
+      return res.json({ ok: false, user: null });
+    }
+
+    return res.json({
+      ok: true,
+      user: {
+        _id: String(dbUser._id),
+        email: dbUser.email || '',
+        firstName: dbUser.firstName || '',
+        lastName: dbUser.lastName || '',
+        roles: Array.isArray(dbUser.roles) ? dbUser.roles : [],
+        proMode: dbUser.proMode || '',
+      },
+    });
+  } catch (err) {
+    console.error('[api/me] error', err);
+    return res.status(500).json({ ok: false, user: null });
   }
-
-  res.json({
-    ok: true,
-    user: {
-      _id: String(id),
-      email:     u.email     || '',
-      firstName: u.firstName || '',
-      lastName:  u.lastName  || '',
-    },
-  });
 });
-
 
 // server.js (or routes/auth.js)
 app.post('/api/logout', (req, res) => {
