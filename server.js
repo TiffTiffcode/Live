@@ -2768,30 +2768,32 @@ app.get('/dev/admin-on', (req, res) => {
 // ME (session probe)
 app.get('/api/me', async (req, res) => {
   try {
-    const id = req.session?.userId || null;
+    const userId = req.session?.userId;
 
-    if (!id) {
+    if (!userId) {
       return res.json({ ok: false, user: null });
     }
 
-    const dbUser = await AuthUser.findById(id).lean();
-    if (!dbUser) {
+    const user = await AuthUser.findById(userId).lean();
+
+    if (!user) {
       return res.json({ ok: false, user: null });
     }
 
     return res.json({
       ok: true,
       user: {
-        _id: String(dbUser._id),
-        email: dbUser.email || '',
-        firstName: dbUser.firstName || '',
-        lastName: dbUser.lastName || '',
-        roles: Array.isArray(dbUser.roles) ? dbUser.roles : [],
-        proMode: dbUser.proMode || '',
-      },
+        _id: String(user._id),
+        email: user.email || "",
+        firstName: user.firstName || "",
+        lastName: user.lastName || "",
+        roles: user.roles || [],
+        proMode: user.proMode || ""
+      }
     });
+
   } catch (err) {
-    console.error('[api/me] error', err);
+    console.error("[api/me] error", err);
     return res.status(500).json({ ok: false, user: null });
   }
 });
