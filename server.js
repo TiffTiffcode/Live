@@ -2587,9 +2587,11 @@ app.get('/api/me/records', ensureAuthenticated, async (req, res) => {
 
 
 // PRO signup (service providers)
+// PRO signup (service providers)
 app.post("/signup/pro", async (req, res) => {
   try {
     const { firstName, lastName, email, password, phone } = req.body || {};
+
     if (!email || !password) {
       return res.status(400).json({ message: "Missing email/password" });
     }
@@ -2597,7 +2599,9 @@ app.post("/signup/pro", async (req, res) => {
     const emailNorm = String(email).toLowerCase().trim();
 
     const existing = await AuthUser.findOne({ email: emailNorm });
-    if (existing) return res.status(409).json({ message: "Email already in use" });
+    if (existing) {
+      return res.status(409).json({ message: "Email already in use" });
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
