@@ -5481,6 +5481,57 @@ function renderTemplate(template, ctx) {
     return val == null ? "" : String(val);
   });
 }
+
+
+
+///////////////////////////////////////////////
+                        //Handoff
+app.post("/api/handoffs/accept", requireLogin, async (req, res) => {
+  try {
+    const userId = String(req.session.userId || "");
+    const { transferGroupId } = req.body || {};
+
+    if (!transferGroupId) {
+      return res.status(400).json({ message: "transferGroupId is required" });
+    }
+
+    const locations = await Record.find({
+      deletedAt: null,
+      dataType: "Location",
+      "values.transferGroupId": transferGroupId,
+      "values.transferStatus": "draft",
+    });
+
+    if (!locations.length) {
+      return res.status(404).json({ message: "No draft transfer found." });
+    }
+
+    for (const loc of locations) {
+      const values = loc.values || {};
+      const keepBuilder = values.builderAccessEnabled !== false;
+
+      values.ownerUserId = userId;
+      values.transferStatus = "accepted";
+      values.transferAcceptedAt = new Date().toISOString();
+
+      if (!keepBuilder) {
+        values.builderUserId = "";
+      }
+
+      loc.values = values;
+      await loc.save();
+    }
+
+    return res.json({
+      ok: true,
+      message: "Transfer accepted successfully.",
+    });
+  } catch (err) {
+    console.error("[handoff accept] error", err);
+    return res.status(500).json({ message: "Failed to accept transfer." });
+  }
+});
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //                                 //Page Routes
 
