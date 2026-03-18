@@ -5491,23 +5491,45 @@ app.post("/api/handoffs/accept", requireLogin, async (req, res) => {
     const userId = String(req.session.userId || "");
     const { transferGroupId } = req.body || {};
 
+    console.log("[handoff accept] incoming transferGroupId:", transferGroupId);
+    console.log("[handoff accept] userId:", userId);
+
     if (!transferGroupId) {
       return res.status(400).json({ message: "transferGroupId is required" });
     }
 
-    const locations = await Record.find({
+    const matchingRecords = await Record.find({
       deletedAt: null,
-      dataType: "Location",
       "values.transferGroupId": transferGroupId,
-      "values.transferStatus": "draft",
-    });
+    }).lean();
 
-    if (!locations.length) {
+    console.log(
+      "[handoff accept] records with this transferGroupId:",
+      matchingRecords.map(r => ({
+        id: r._id,
+        dataType: r.dataType,
+        transferGroupId: r.values?.transferGroupId,
+        transferStatus: r.values?.transferStatus,
+        ownerUserId: r.values?.ownerUserId,
+        builderUserId: r.values?.builderUserId,
+      }))
+    );
+
+    const draftRecords = matchingRecords.filter(
+      (r) => r.values?.transferStatus === "draft"
+    );
+
+    console.log("[handoff accept] draftRecords count:", draftRecords.length);
+
+    if (!draftRecords.length) {
       return res.status(404).json({ message: "No draft transfer found." });
     }
 
-    for (const loc of locations) {
-      const values = loc.values || {};
+    for (const recordData of draftRecords) {
+      const record = await Record.findById(recordData._id);
+      if (!record) continue;
+
+      const values = record.values || {};
       const keepBuilder = values.builderAccessEnabled !== false;
 
       values.ownerUserId = userId;
@@ -5518,8 +5540,8 @@ app.post("/api/handoffs/accept", requireLogin, async (req, res) => {
         values.builderUserId = "";
       }
 
-      loc.values = values;
-      await loc.save();
+      record.values = values;
+      await record.save();
     }
 
     return res.json({
@@ -5531,7 +5553,6 @@ app.post("/api/handoffs/accept", requireLogin, async (req, res) => {
     return res.status(500).json({ message: "Failed to accept transfer." });
   }
 });
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //                                 //Page Routes
 
