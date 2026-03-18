@@ -5498,16 +5498,16 @@ app.post("/api/handoffs/accept", requireLogin, async (req, res) => {
       return res.status(400).json({ message: "transferGroupId is required" });
     }
 
-    const matchingRecords = await Record.find({
+    const records = await Record.find({
       deletedAt: null,
       "values.transferGroupId": transferGroupId,
-    }).lean();
+      "values.transferStatus": "draft",
+    });
 
     console.log(
       "[handoff accept] records with this transferGroupId:",
-      matchingRecords.map(r => ({
+      records.map((r) => ({
         id: r._id,
-        dataType: r.dataType,
         transferGroupId: r.values?.transferGroupId,
         transferStatus: r.values?.transferStatus,
         ownerUserId: r.values?.ownerUserId,
@@ -5515,21 +5515,12 @@ app.post("/api/handoffs/accept", requireLogin, async (req, res) => {
       }))
     );
 
-    const draftRecords = matchingRecords.filter(
-      (r) => r.values?.transferStatus === "draft"
-    );
-
-    console.log("[handoff accept] draftRecords count:", draftRecords.length);
-
-    if (!draftRecords.length) {
+    if (!records.length) {
       return res.status(404).json({ message: "No draft transfer found." });
     }
 
-    for (const recordData of draftRecords) {
-      const record = await Record.findById(recordData._id);
-      if (!record) continue;
-
-      const values = record.values || {};
+    for (const record of records) {
+      const values = { ...(record.values || {}) };
       const keepBuilder = values.builderAccessEnabled !== false;
 
       values.ownerUserId = userId;
@@ -5541,7 +5532,16 @@ app.post("/api/handoffs/accept", requireLogin, async (req, res) => {
       }
 
       record.values = values;
+      record.markModified("values");
       await record.save();
+
+      console.log("[handoff accept] saved record:", {
+        id: record._id,
+        transferGroupId: record.values?.transferGroupId,
+        transferStatus: record.values?.transferStatus,
+        ownerUserId: record.values?.ownerUserId,
+        builderUserId: record.values?.builderUserId,
+      });
     }
 
     return res.json({
