@@ -530,7 +530,7 @@ function uploadBufferToCloudinary(buffer, { folder = "suiteseat", public_id } = 
       {
         folder,
         public_id,
-        resource_type: "image",
+       resource_type: "auto",
       },
       (err, result) => {
         if (err) return reject(err);
@@ -1456,7 +1456,7 @@ app.post("/api/upload", uploadMem.single("file"), async (req, res) => {
       const stream = cloudinary.uploader.upload_stream(
         {
           folder,
-          resource_type: "image",
+          resource_type: "auto",
         },
         (err, out) => (err ? reject(err) : resolve(out))
       );
@@ -3076,6 +3076,10 @@ app.patch('/api/fields/:id', async (req, res) => {
     }
     if ('allowMultiple' in req.body) {
       setOps.allowMultiple = !!req.body.allowMultiple; // optional, matches your UI if you add a toggle later
+    }
+
+        if ('referenceTo' in req.body) {
+      setOps.referenceTo = req.body.referenceTo || null;
     }
 
     if (!Object.keys(setOps).length) {
@@ -5482,7 +5486,87 @@ function renderTemplate(template, ctx) {
   });
 }
 
+/////////////////////////////////////////
+                        //Form Submission
+app.post("/api/public/submit-record", async (req, res) => {
+  try {
+    const { dataTypeName, values } = req.body || {};
 
+    if (!dataTypeName) {
+      return res.status(400).json({ message: "dataTypeName is required" });
+    }
+
+    if (!values || typeof values !== "object" || Array.isArray(values)) {
+      return res.status(400).json({ message: "values object is required" });
+    }
+
+    const dataType = await DataType.findOne({ name: dataTypeName });
+    if (!dataType) {
+      return res.status(404).json({ message: "DataType not found" });
+    }
+
+    const normalizedValues = { ...values };
+
+    let suiteId = null;
+
+    if (
+      normalizedValues["Suite"] &&
+      typeof normalizedValues["Suite"] === "string"
+    ) {
+      suiteId = normalizedValues["Suite"];
+      normalizedValues["Suite"] = { _id: suiteId };
+    } else if (
+      normalizedValues["Suite"] &&
+      typeof normalizedValues["Suite"] === "object"
+    ) {
+      suiteId =
+        normalizedValues["Suite"]?._id ||
+        normalizedValues["Suite"]?.id ||
+        null;
+    }
+
+    let createdBy = null;
+
+    if (suiteId) {
+      const suiteRecord = await Record.findById(suiteId);
+
+      if (suiteRecord) {
+        createdBy =
+          suiteRecord.createdBy ||
+          suiteRecord.values?.["Created By"]?._id ||
+          suiteRecord.values?.["Created By"] ||
+          suiteRecord.values?.ownerUserId ||
+          null;
+      }
+    }
+
+    if (!createdBy) {
+      return res.status(400).json({
+        message: "Could not determine suite owner for createdBy.",
+      });
+    }
+
+    console.log("submit-record dataTypeName:", dataTypeName);
+    console.log("submit-record dataTypeId:", String(dataType._id));
+    console.log("submit-record suiteId:", suiteId);
+    console.log("submit-record createdBy:", createdBy);
+    console.log("submit-record normalizedValues:", normalizedValues);
+
+    const newRecord = await Record.create({
+      dataTypeId: dataType._id,
+      createdBy,
+      values: normalizedValues,
+    });
+
+    return res.json({ item: newRecord });
+  } catch (err) {
+    console.error("submit-record error:", err);
+    return res.status(500).json({
+      message: err?.message || "Server error",
+      stack: process.env.NODE_ENV !== "production" ? err?.stack : undefined,
+    });
+  }
+});
 
 ///////////////////////////////////////////////
                         //Handoff
